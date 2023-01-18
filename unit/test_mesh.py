@@ -12,7 +12,7 @@ class TestMesh(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(
-                mesh.coordinates,
+                mesh.nodes,
                 torch.tensor([[0, 0, 0], [1.0 / 3, 0, 0], [2.0 / 3, 0, 0], [1, 0, 0]]),
             )
         )

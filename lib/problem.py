@@ -2,6 +2,7 @@ import torch
 
 import qrule
 import shape
+import dofmap
 import meshio
 
 from functorch import vmap
@@ -45,10 +46,35 @@ class FEProblem:
                 )
             ]
         )
-        self.variables = {}
+
+        self.dofmap = dofmap.DofMap(mesh)
+        self.ics = {}
+        self.variables = []
 
     def add_variable(self, variable_name, ic):
-        self.variables[variable_name] = vmap(ic)(self.mesh.coordinates)
+        self.dofmap.add_variable(variable_name)
+        self.ics[variable_name] = ic
+        self.variables.append(variable_name)
 
+    def init_solution(self):
+        self.sol = torch.empty(self.dofmap.num_dofs())
+        for variable_name, ic in self.ics.items():
+            self.sol[self.dofmap.dofs(variable_name)] = vmap(ic)(self.mesh.nodes)
 
-# dofmap
+    def solution(self):
+        return self.sol
+
+    def solution(self, variable_name):
+        return self.sol[self.dofmap.dofs(variable_name)]
+
+    def write_vtk(self, file_name):
+
+        output = meshio.Mesh(
+            self.mesh.nodes,
+            [("quad", self.mesh.connectivity)],
+            point_data={
+                variable: self.solution(variable) for variable in self.variables
+            },
+        )
+
+        output.write(file_name)

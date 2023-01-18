@@ -9,12 +9,18 @@ class ElemType(IntEnum):
 
 class Mesh:
     def elems(self):
-        return self.coordinates[self.connectivity]
+        return self.nodes[self.connectivity]
+
+    def num_nodes(self):
+        return len(self.nodes)
+
+    def num_elems(self):
+        return len(self.connectivity)
 
 
 class LineMesh(Mesh):
     def __init__(self, params):
-        self.coordinates = torch.column_stack(
+        self.nodes = torch.column_stack(
             (
                 torch.linspace(params["xmin"], params["xmax"], params["N"] + 1),
                 torch.zeros((params["N"] + 1, 1)),
@@ -36,7 +42,7 @@ class RectangleMesh(Mesh):
             torch.linspace(params["ymin"], params["ymax"], params["Ny"] + 1),
             indexing="ij",
         )
-        self.coordinates = torch.column_stack(
+        self.nodes = torch.column_stack(
             (grid_x.flatten(), grid_y.flatten(), torch.zeros_like(grid_x.flatten()))
         )
 
