@@ -5,3 +5,6 @@ import problem
 import dofmap
 import weakform
 import interpolation
+import torch
+
+torch.set_default_dtype(torch.float64)
