@@ -12,11 +12,12 @@ from functorch import vmap
 class FEProblem:
     def __init__(self, mesh):
         self.mesh = mesh
+        self.device = mesh.device
         qweights = torch.stack(
-            [qrule.qweights(elem_type, 1) for elem_type in mesh.elem_type]
+            [qrule.qweights(elem_type, 1, self.device) for elem_type in mesh.elem_type]
         )
         qpoints = torch.stack(
-            [qrule.qpoints(elem_type, 1) for elem_type in mesh.elem_type]
+            [qrule.qpoints(elem_type, 1, self.device) for elem_type in mesh.elem_type]
         )
         self.phis = torch.stack(
             [
@@ -54,8 +55,12 @@ class FEProblem:
         self.weakforms = []
         self.coupled_values = []
         self.coupled_gradients = []
-        self.interpolated_values = torch.empty(self.mesh.num_elems())
-        self.interpolated_gradients = torch.empty(self.mesh.num_elems())
+        self.interpolated_values = torch.empty(
+            self.mesh.num_elems(), device=self.device
+        )
+        self.interpolated_gradients = torch.empty(
+            self.mesh.num_elems(), device=self.device
+        )
 
     def interpolate(self):
         # num_elems x num_qp x num_coupled_values
@@ -116,7 +121,7 @@ class FEProblem:
         self.variables.append(variable_name)
 
     def init_solution(self):
-        self.sol = torch.empty(self.dofmap.num_dofs())
+        self.sol = torch.empty(self.dofmap.num_dofs(), device=self.device)
         for variable_name, ic in self.ics.items():
             self.sol[self.dofmap.dofs(variable_name)] = vmap(ic)(self.mesh.nodes)
         self.interpolate()
@@ -130,10 +135,10 @@ class FEProblem:
     def write_vtk(self, file_name):
 
         output = meshio.Mesh(
-            self.mesh.nodes,
-            [("quad", self.mesh.connectivity)],
+            self.mesh.nodes.cpu(),
+            [("quad", self.mesh.connectivity.cpu())],
             point_data={
-                variable: self.solution(variable) for variable in self.variables
+                variable: self.solution(variable).cpu() for variable in self.variables
             },
         )
 

@@ -20,9 +20,9 @@ def phi(elem_type, x):
 def grad_phi(elem_type, x):
     batch_size = len(x)
     if elem_type == ElemType.Line2:
-        return torch.tensor([[[-1.0 / 2, 0, 0], [1.0 / 2, 0, 0]]]).expand(
-            batch_size, -1, -1
-        )
+        return torch.tensor(
+            [[[-1.0 / 2, 0, 0], [1.0 / 2, 0, 0]]], device=x.device
+        ).expand(batch_size, -1, -1)
     if elem_type == ElemType.Quad4:
         return torch.stack(
             (
@@ -30,7 +30,7 @@ def grad_phi(elem_type, x):
                     (
                         0.25 * (1 + x[..., 1]),
                         0.25 * (1 + x[..., 0]),
-                        torch.zeros((batch_size)),
+                        torch.zeros((batch_size), device=x.device),
                     ),
                     dim=-1,
                 ),
@@ -38,7 +38,7 @@ def grad_phi(elem_type, x):
                     (
                         -0.25 * (1 + x[..., 1]),
                         0.25 * (1 - x[..., 0]),
-                        torch.zeros((batch_size)),
+                        torch.zeros((batch_size), device=x.device),
                     ),
                     dim=-1,
                 ),
@@ -46,7 +46,7 @@ def grad_phi(elem_type, x):
                     (
                         -0.25 * (1 - x[..., 1]),
                         -0.25 * (1 - x[..., 0]),
-                        torch.zeros((batch_size)),
+                        torch.zeros((batch_size), device=x.device),
                     ),
                     dim=-1,
                 ),
@@ -54,7 +54,7 @@ def grad_phi(elem_type, x):
                     (
                         0.25 * (1 - x[..., 1]),
                         -0.25 * (1 + x[..., 0]),
-                        torch.zeros((batch_size)),
+                        torch.zeros((batch_size), device=x.device),
                     ),
                     dim=-1,
                 ),

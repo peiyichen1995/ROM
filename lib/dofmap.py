@@ -4,6 +4,7 @@ import torch
 class DofMap:
     def __init__(self, mesh):
         self.mesh = mesh
+        self.device = mesh.device
         self.variable_id = {}
 
     def add_variable(self, variable_name):
@@ -16,7 +17,9 @@ class DofMap:
         return self.node_dof(variable_name, self.mesh.connectivity[elem_id])
 
     def dofs(self, variable_name):
-        return self.node_dof(variable_name, torch.arange(0, self.mesh.num_nodes()))
+        return self.node_dof(
+            variable_name, torch.arange(0, self.mesh.num_nodes(), device=self.device)
+        )
 
     def num_dofs(self):
         return len(self.variable_id) * self.mesh.num_nodes()
