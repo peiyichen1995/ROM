@@ -31,3 +31,6 @@ class Diffusion(WeakForm):
 
     def d_evaluate(self, jvar, phi, grad_phi, JxW, value, gradient):
         return torch.einsum("ijk,ilk,i->jl", grad_phi, grad_phi, JxW)
+
+
+# time derivative

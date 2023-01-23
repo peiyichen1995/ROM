@@ -4,6 +4,7 @@ import qrule
 import shape
 import dofmap
 import interpolation
+import bc
 import scipy
 import numpy
 import meshio
@@ -63,6 +64,7 @@ class FEProblem:
         self.interpolated_gradients = torch.empty(
             self.mesh.num_elems(), device=self.device
         )
+        self.nodal_bcs = []
 
     def interpolate(self):
         # num_elems x num_qp x num_coupled_values
@@ -114,81 +116,85 @@ class FEProblem:
         return self.coupled_gradients.index(variable_name)
 
     def residual(self):
-        res = scipy.sparse.coo_array((self.dofmap.num_dofs(), 1), dtype=numpy.float64)
-        col_idx = numpy.zeros_like(self.mesh.connectivity.cpu()).flatten()
+        res = torch.sparse_coo_tensor(
+            torch.empty([1, 0]), [], [self.dofmap.num_dofs()], device=self.device
+        )
         for variable in self.variables:
             row_idx = (
-                self.dofmap.node_dof(variable, self.mesh.connectivity).cpu().flatten()
+                self.dofmap.node_dof(variable, self.mesh.connectivity)
+                .flatten()
+                .unsqueeze(0)
             )
             for weakform in self.weakforms:
                 if weakform.variable is not variable:
                     continue
-                res += scipy.sparse.coo_array(
-                    (
-                        vmap(weakform.evaluate)(
-                            self.phis,
-                            self.grad_phis,
-                            self.JxWs,
-                            self.interpolated_values,
-                            self.interpolated_gradients,
-                        )
-                        .cpu()
-                        .flatten(),
-                        (
-                            row_idx,
-                            col_idx,
-                        ),
-                    ),
-                    shape=(self.dofmap.num_dofs(), 1),
+                res += torch.sparse_coo_tensor(
+                    row_idx,
+                    vmap(weakform.evaluate)(
+                        self.phis,
+                        self.grad_phis,
+                        self.JxWs,
+                        self.interpolated_values,
+                        self.interpolated_gradients,
+                    ).flatten(),
+                    [self.dofmap.num_dofs()],
                 )
 
-        return res.todense()
+        res = res.to_dense()
+        for bc in self.nodal_bcs:
+            bc.apply_residual(res)
+
+        return res.cpu()
 
     def jacobian(self):
-        jac = scipy.sparse.coo_array(
-            (self.dofmap.num_dofs(), self.dofmap.num_dofs()), dtype=numpy.float64
+        jac = torch.sparse_coo_tensor(
+            torch.empty([2, 0]),
+            [],
+            [self.dofmap.num_dofs(), self.dofmap.num_dofs()],
+            device=self.device,
         )
         for ivar in self.variables:
-            row_idx = numpy.repeat(
-                self.dofmap.node_dof(ivar, self.mesh.connectivity).cpu(),
+            row_idx = torch.repeat_interleave(
+                self.dofmap.node_dof(ivar, self.mesh.connectivity),
                 self.mesh.connectivity.shape[1],
-                axis=1,
+                dim=1,
             ).flatten()
             for jvar in self.variables:
-                col_idx = numpy.tile(
-                    self.dofmap.node_dof(jvar, self.mesh.connectivity).cpu(),
-                    [1, self.mesh.connectivity.shape[1]],
-                ).flatten()
+                col_idx = (
+                    self.dofmap.node_dof(jvar, self.mesh.connectivity)
+                    .repeat([1, self.mesh.connectivity.shape[1]])
+                    .flatten()
+                )
                 for weakform in self.weakforms:
                     if (
                         weakform.variable is not ivar
                         or jvar not in weakform.coupled_variables
                     ):
                         continue
-                    jac += scipy.sparse.coo_array(
-                        (
-                            vmap(
-                                lambda phi, grad_phi, JxW, value, gradient: weakform.d_evaluate(
-                                    jvar, phi, grad_phi, JxW, value, gradient
-                                )
-                            )(
-                                self.phis,
-                                self.grad_phis,
-                                self.JxWs,
-                                self.interpolated_values,
-                                self.interpolated_gradients,
-                            )
-                            .cpu()
-                            .flatten(),
-                            (
-                                row_idx,
-                                col_idx,
-                            ),
-                        ),
-                        shape=(self.dofmap.num_dofs(), self.dofmap.num_dofs()),
-                    )
 
-        return jac.tocsc()
+                    jac += torch.sparse_coo_tensor(
+                        torch.stack([row_idx, col_idx]),
+                        vmap(
+                            lambda phi, grad_phi, JxW, value, gradient: weakform.d_evaluate(
+                                jvar, phi, grad_phi, JxW, value, gradient
+                            )
+                        )(
+                            self.phis,
+                            self.grad_phis,
+                            self.JxWs,
+                            self.interpolated_values,
+                            self.interpolated_gradients,
+                        ).flatten(),
+                        [self.dofmap.num_dofs(), self.dofmap.num_dofs()],
+                    )
+        jac = jac.coalesce()
+        jac = scipy.sparse.coo_array(
+            (jac.values().cpu(), jac.indices().cpu()), shape=jac.shape
+        ).tocsr()
+        for bc in self.nodal_bcs:
+            bc.apply_jacobian(jac)
+
+        return jac
 
     def add_weakform(self, weakform):
         self.weakforms.append(weakform)
@@ -210,6 +216,31 @@ class FEProblem:
     def solution(self, variable_name):
         return self.sol[self.dofmap.dofs(variable_name)]
 
+    def add_nodal_bc(self, bc):
+        self.nodal_bcs.append(bc)
+
+    def solution_add(self, x):
+        self.sol += torch.tensor(x, device=self.device)
+        self.interpolate()
+
+    def solve(self, atol=1e-8, rtol=1e-6, max_itr=20):
+        i = 0
+        r = self.residual()
+        r_norm = torch.linalg.norm(r)
+        r_norm_0 = r_norm.item()
+        print("Iteration {:}, ||r|| = {:.3E}".format(i, r_norm.item()))
+        converged = False
+        while not converged:
+            i += 1
+            if i > max_itr:
+                raise Exception("Maximum iteration reached.")
+            J = self.jacobian()
+            self.solution_add(-scipy.sparse.linalg.spsolve(J, r))
+            r = self.residual()
+            r_norm = torch.linalg.norm(r)
+            print("Iteration {:}, ||r|| = {:.3E}".format(i, r_norm.item()))
+            converged = r_norm.item() < atol or r_norm.item() < r_norm_0 * rtol
+
     def write_vtk(self, file_name):
 
         output = meshio.Mesh(
@@ -221,3 +252,10 @@ class FEProblem:
         )
 
         output.write(file_name)
+
+
+# save previous sol vector
+# burgers
+# nm rom
+
+# complex problem
