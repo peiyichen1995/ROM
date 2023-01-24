@@ -8,6 +8,7 @@ import bc
 import scipy
 import numpy
 import meshio
+from pathlib import Path
 
 from functorch import vmap
 
@@ -57,14 +58,20 @@ class FEProblem:
         self.variables = []
         self.weakforms = []
         self.coupled_values = []
+        self.coupled_values_old = []
         self.coupled_gradients = []
         self.interpolated_values = torch.empty(
+            self.mesh.num_elems(), device=self.device
+        )
+        self.interpolated_values_old = torch.empty(
             self.mesh.num_elems(), device=self.device
         )
         self.interpolated_gradients = torch.empty(
             self.mesh.num_elems(), device=self.device
         )
+        self.dt = torch.zeros(self.mesh.num_elems(), device=self.device)
         self.nodal_bcs = []
+        self.time = torch.zeros(self.mesh.num_elems(), device=self.device)
 
     def interpolate(self):
         # num_elems x num_qp x num_coupled_values
@@ -78,6 +85,21 @@ class FEProblem:
                         ],
                     )
                     for variable_name in self.coupled_values
+                ],
+                dim=-1,
+            )
+
+        # num_elems x num_qp x num_coupled_values
+        if self.coupled_values_old:
+            self.interpolated_values_old = torch.stack(
+                [
+                    vmap(interpolation.interpolate_values)(
+                        self.phis,
+                        self.sol_old[
+                            self.dofmap.node_dof(variable_name, self.mesh.connectivity)
+                        ],
+                    )
+                    for variable_name in self.coupled_values_old
                 ],
                 dim=-1,
             )
@@ -105,6 +127,11 @@ class FEProblem:
             self.coupled_values.append(variable_name)
 
         return self.coupled_values.index(variable_name)
+
+    def register_coupled_value_old(self, weakform, variable_name):
+        if variable_name not in self.coupled_values_old:
+            self.coupled_values_old.append(variable_name)
+        return self.coupled_values_old.index(variable_name)
 
     def register_coupled_gradient(self, weakform, variable_name):
         if variable_name not in weakform.coupled_variables:
@@ -136,6 +163,8 @@ class FEProblem:
                         self.JxWs,
                         self.interpolated_values,
                         self.interpolated_gradients,
+                        self.interpolated_values_old,
+                        self.dt,
                     ).flatten(),
                     [self.dofmap.num_dofs()],
                 )
@@ -174,16 +203,19 @@ class FEProblem:
 
                     jac += torch.sparse_coo_tensor(
                         torch.stack([row_idx, col_idx]),
-                        vmap(
-                            lambda phi, grad_phi, JxW, value, gradient: weakform.d_evaluate(
-                                jvar, phi, grad_phi, JxW, value, gradient
-                            )
-                        )(
+                        vmap(weakform.d_evaluate)(
+                            torch.full(
+                                (self.mesh.num_elems(),),
+                                self.variables.index(jvar),
+                                device=self.device,
+                            ),
                             self.phis,
                             self.grad_phis,
                             self.JxWs,
                             self.interpolated_values,
                             self.interpolated_gradients,
+                            self.interpolated_values_old,
+                            self.dt,
                         ).flatten(),
                         [self.dofmap.num_dofs(), self.dofmap.num_dofs()],
                     )
@@ -207,7 +239,10 @@ class FEProblem:
     def init_solution(self):
         self.sol = torch.empty(self.dofmap.num_dofs(), device=self.device)
         for variable_name, ic in self.ics.items():
-            self.sol[self.dofmap.dofs(variable_name)] = vmap(ic)(self.mesh.nodes)
+            self.sol[self.dofmap.dofs(variable_name)] = vmap(
+                ic, randomness="different"
+            )(self.mesh.nodes).reshape(-1)
+        self.sol_old = self.sol.clone()
         self.interpolate()
 
     def solution(self):
@@ -222,6 +257,12 @@ class FEProblem:
     def solution_add(self, x):
         self.sol += torch.tensor(x, device=self.device)
         self.interpolate()
+
+    def advance_in_time(self, dt):
+        self.sol_old = self.sol.clone()
+        self.interpolate()
+        self.time += dt
+        self.dt = torch.full((self.mesh.num_elems(),), dt, device=self.device)
 
     def solve(self, atol=1e-8, rtol=1e-6, max_itr=20):
         i = 0
@@ -241,7 +282,16 @@ class FEProblem:
             print("Iteration {:}, ||r|| = {:.3E}".format(i, r_norm.item()))
             converged = r_norm.item() < atol or r_norm.item() < r_norm_0 * rtol
 
-    def write_vtk(self, file_name):
+    def print_time(self):
+        print(
+            "time = {:.6E}, dt = {:.6E}".format(
+                self.time.cpu()[0].item(), self.dt.cpu()[0].item()
+            )
+        )
+
+    def write_step(self, file_name, step):
+        file = Path(file_name)
+        file = file.stem + "_{:}".format(step) + file.suffix
 
         output = meshio.Mesh(
             self.mesh.nodes.cpu(),
@@ -251,10 +301,9 @@ class FEProblem:
             },
         )
 
-        output.write(file_name)
+        output.write(file)
 
 
-# save previous sol vector
 # burgers
 # nm rom
 
