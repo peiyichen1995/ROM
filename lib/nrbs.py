@@ -1,32 +1,28 @@
 import torch
 
+torch.set_default_dtype(torch.float64)
+
 
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n, encoder_dims, decoder_dims):
+    def __init__(self, N, n):
         super(NRBS, self).__init__()
-        self.encoder = []
-        in_dim = N
-        for encoder_dim in encoder_dims:
-            self.encoder.append(torch.nn.Linear(in_dim, encoder_dim))
-            in_dim = encoder_dim
-        self.encoder.append(torch.nn.Linear(in_dim, n))
+        self.N = N
+        self.n = n
 
-        self.decoder = []
-        in_dim = n
-        for decoder_dim in decoder_dims:
-            self.decoder.append(torch.nn.Linear(in_dim, decoder_dim))
-            in_dim = decoder_dim
-        self.decoder.append(torch.nn.Linear(in_dim, N))
+        self.encoder = torch.nn.Linear(self.N, self.n)
+        # self.decoder = torch.nn.Linear(self.n, self.N)
+        self.decoder = torch.nn.Parameter(
+            torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
+        )
+        self.bandwidth = torch.nn.Parameter(
+            torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
+        )
 
     def encode(self, x):
-        for layer in self.encoder:
-            x = layer(x)
-        return x
+        return self.encoder(x)
 
-    def decode(self, x):
-        for layer in self.decoder:
-            x = layer(x)
-        return x
+    def decode(self, encoded):
+        return torch.matmul(encoded, self.decoder)
 
     def forward(self, x):
         return self.decode(self.encode(x))
