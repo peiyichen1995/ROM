@@ -1,13 +1,15 @@
 import torch
+from functorch import vmap
 
 torch.set_default_dtype(torch.float64)
 
 
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n):
+    def __init__(self, N, n, mu):
         super(NRBS, self).__init__()
         self.N = N
         self.n = n
+        self.mu = mu
 
         self.encoder = torch.nn.Linear(self.N, self.n)
         # self.decoder = torch.nn.Linear(self.n, self.N)
@@ -22,7 +24,17 @@ class NRBS(torch.nn.Module):
         return self.encoder(x)
 
     def decode(self, encoded):
+        vmap_bubble = vmap(self.bubble, in_dims=0)
+        vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
+        bubbles = vmap_vmap_bubble(self.bandwidth)
+        print("bubbles shape: ", bubbles.shape)
         return torch.matmul(encoded, self.decoder)
 
     def forward(self, x):
         return self.decode(self.encode(x))
+
+    def bubble(self, w):
+        x = torch.arange(2 * self.mu)
+        window = torch.relu(-((x - self.mu) ** 2) / (w * self.mu) ** 2 + 1)
+        window = window / torch.sum(window)
+        return window
