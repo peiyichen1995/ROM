@@ -5,11 +5,12 @@ torch.set_default_dtype(torch.float64)
 
 
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n, mu):
+    def __init__(self, N, n, mu, neighbours):
         super(NRBS, self).__init__()
         self.N = N
         self.n = n
         self.mu = mu
+        self.neighbours = neighbours
 
         self.encoder = torch.nn.Linear(self.N, self.n)
         # self.decoder = torch.nn.Linear(self.n, self.N)
@@ -38,3 +39,9 @@ class NRBS(torch.nn.Module):
         window = torch.relu(-((x - self.mu) ** 2) / (w * self.mu) ** 2 + 1)
         window = window / torch.sum(window)
         return window
+
+    def getNeighbours(self, idx):
+        return self.neighbours[idx]
+
+    def convolve(self, x, bubble):
+        return x * bubble
