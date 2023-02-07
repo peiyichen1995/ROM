@@ -53,6 +53,12 @@ class NRBS(torch.nn.Module):
     def convolve(self, x, bubble):
         return x * bubble
 
+    def smooth_vec(self, basis_idx, node_idx, bubbles):
+        return (
+            self.decoder[basis_idx][self.getNeighbours(node_idx)]
+            * bubbles[basis_idx][node_idx]
+        ).sum(dim=1, keepdims=True)
+
     def smooth(self, basis_idx, node_idx, bubbles):
         return torch.sum(
             self.decoder[basis_idx][self.getNeighbours(node_idx)]
