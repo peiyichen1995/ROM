@@ -27,6 +27,7 @@ class NRBS(torch.nn.Module):
     def decode(self, encoded):
         vmap_bubble = vmap(self.bubble, in_dims=0)
         vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
+        # n x N x mu
         bubbles = vmap_vmap_bubble(self.bandwidth)
         print("bubbles shape: ", bubbles.shape)
         return torch.matmul(encoded, self.decoder)
@@ -51,3 +52,9 @@ class NRBS(torch.nn.Module):
 
     def convolve(self, x, bubble):
         return x * bubble
+
+    def smooth(self, basis_idx, node_idx, bubbles):
+        return torch.sum(
+            self.decoder[basis_idx][self.getNeighbours(node_idx)]
+            * bubbles[basis_idx][node_idx]
+        )
