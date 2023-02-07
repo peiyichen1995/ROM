@@ -7,5 +7,6 @@ import weakform
 import interpolation
 import bc
 import torch
+import nrbs
 
 torch.set_default_dtype(torch.float64)
