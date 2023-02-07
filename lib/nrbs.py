@@ -34,9 +34,15 @@ class NRBS(torch.nn.Module):
     def forward(self, x):
         return self.decode(self.encode(x))
 
+    # def bubble(self, w):
+    #     x = torch.arange(2 * self.mu)
+    #     window = torch.relu(-((x - self.mu) ** 2) / (w * self.mu) ** 2 + 1)
+    #     window = window / torch.sum(window)
+    #     return window
+
     def bubble(self, w):
-        x = torch.arange(2 * self.mu)
-        window = torch.relu(-((x - self.mu) ** 2) / (w * self.mu) ** 2 + 1)
+        x = torch.arange(self.mu)
+        window = torch.relu(-(x**2) / (w * self.mu) ** 2 + 1)
         window = window / torch.sum(window)
         return window
 
