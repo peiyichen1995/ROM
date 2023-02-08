@@ -1,5 +1,6 @@
 import torch
 from functorch import vmap
+import tqdm
 
 torch.set_default_dtype(torch.float64)
 
@@ -29,7 +30,7 @@ class NRBS(torch.nn.Module):
         vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
         # n x N x mu
         bubbles = vmap_vmap_bubble(self.bandwidth)
-        print("bubbles shape: ", bubbles.shape)
+        # print("bubbles shape: ", bubbles.shape)
         smoothed_basis = self.smooth_basis(bubbles=bubbles)
         # return torch.matmul(encoded, self.decoder)
         return torch.matmul(encoded, smoothed_basis)
@@ -75,3 +76,43 @@ class NRBS(torch.nn.Module):
             self.decoder[basis_idx][self.getNeighbours(node_idx)]
             * bubbles[basis_idx][node_idx]
         )
+
+
+# class EncoderDecoder(torch.nn.Module):
+#     def __init__(self, nrbs):
+#         super(EncoderDecoder, self).__init__()
+#         self.nrbs = nrbs
+
+#     def train(self, Train_loader, epochs=1):
+
+#         optim = torch.optim.Adam(self.nrbs.parameters(), 1e-5)
+#         loss_function = torch.nn.BCEWithLogitsLoss()
+
+#         best_acc = float("inf")
+#         for i in range(epochs):
+#             print("Epoch ", i)
+#             self.nrbs.train()
+#             curr_loss = 0
+#             for j, X in enumerate(tqdm.notebook.tqdm(Train_loader)):
+#                 input_id = X[0]
+#                 mask = X[1]
+#                 label = X[2]
+#                 input_id = input_id.to(device)
+#                 mask = mask.to(device)
+#                 label = label.to(device)
+
+#                 outputs = self.rs_model((input_id, mask))
+
+#                 loss = loss_function(outputs, (label.unsqueeze(1)).float())
+#                 loss.backward()
+#                 curr_loss = curr_loss + loss
+
+#                 if ((j + 1) % accu_itr == 0) or (j + 1 == len(TokenizedRSTrain_loader)):
+#                     print("accumulated batch loss:", curr_loss)
+#                     optim.step()
+#                     optim.zero_grad()
+#                     # lr_scheduler.step()
+#                     curr_loss = 0
+
+#             curr_acc = self.evaluate(TokenizedRSDev_loader)
+#             torch.save(self.rs_model, "rs_fever_" + str(i) + ".pth")
