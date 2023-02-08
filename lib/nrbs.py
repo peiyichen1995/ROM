@@ -42,8 +42,8 @@ class NRBS(torch.nn.Module):
         vmap_bubble = vmap(self.bubble, in_dims=0)
         vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
         # batch size x N x mu
-        bubbles = vmap_vmap_bubble(self.bandwidth_layer(encoded))
-        print("bubbles shape: ", bubbles.shape)
+        bubbles = vmap_vmap_bubble(torch.sigmoid(self.bandwidth_layer(encoded)))
+        # print("bubbles shape: ", bubbles.shape)
         # batch size x n x N
         smoothed_basis = self.smooth_basis(bubbles=bubbles)
         # batch size x 1 x n
