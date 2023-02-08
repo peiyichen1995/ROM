@@ -6,12 +6,13 @@ torch.set_default_dtype(torch.float64)
 
 
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n, mu, neighbours):
+    def __init__(self, N, n, mu, neighbours, device):
         super(NRBS, self).__init__()
         self.N = N
         self.n = n
         self.mu = mu
-        self.neighbours = neighbours
+        self.neighbours = neighbours.to(device)
+        self.device = device
 
         self.encoder = torch.nn.Linear(self.N, self.n)
         # self.decoder = torch.nn.Linear(self.n, self.N)
@@ -45,7 +46,7 @@ class NRBS(torch.nn.Module):
     #     return window
 
     def bubble(self, w):
-        x = torch.arange(self.mu)
+        x = torch.arange(self.mu, device=self.device)
         window = torch.relu(-(x**2) / (w * self.mu) ** 2 + 1)
         window = window / torch.sum(window)
         return window
@@ -79,9 +80,10 @@ class NRBS(torch.nn.Module):
 
 
 class EncoderDecoder(torch.nn.Module):
-    def __init__(self, nrbs):
+    def __init__(self, nrbs, device):
         super(EncoderDecoder, self).__init__()
-        self.nrbs = nrbs
+        self.nrbs = nrbs.to(device)
+        self.device = device
 
     def train(self, train_data_loader, epochs=1):
 
@@ -92,6 +94,7 @@ class EncoderDecoder(torch.nn.Module):
             self.nrbs.train()
             curr_loss = 0
             for x in tqdm.tqdm(train_data_loader):
+                x = x.to(self.device)
                 approximates = self.nrbs(x)
                 # loss = torch.sum(loss_func(x, approximates), dim=1)
                 loss = torch.sum(loss_func(x, approximates))
