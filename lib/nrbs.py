@@ -14,27 +14,42 @@ class NRBS(torch.nn.Module):
         self.neighbours = neighbours.to(device)
         self.device = device
 
-        self.encoder = torch.nn.Linear(self.N, self.n)
+        self.encoder = torch.nn.Linear(self.N, self.n, device=self.device)
         # self.decoder = torch.nn.Linear(self.n, self.N)
         self.decoder = torch.nn.Parameter(
             torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
         )
-        self.bandwidth = torch.nn.Parameter(
-            torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
-        )
+        # self.bandwidth = torch.nn.Parameter(
+        #     torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
+        # )
+        self.bandwidth_layer = torch.nn.Linear(self.n, self.N, device=self.device)
 
     def encode(self, x):
         return self.encoder(x)
 
+    # width not related to u hat
+    # def decode_not_of_u(self, encoded):
+    #     vmap_bubble = vmap(self.bubble, in_dims=0)
+    #     vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
+    #     # n x N x mu
+    #     bubbles = vmap_vmap_bubble(self.bandwidth)
+    #     print("bubbles shape: ", bubbles.shape)
+    #     smoothed_basis = self.smooth_basis(bubbles=bubbles)
+    #     # return torch.matmul(encoded, self.decoder)
+    #     return torch.matmul(encoded, smoothed_basis)
+
     def decode(self, encoded):
         vmap_bubble = vmap(self.bubble, in_dims=0)
         vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
-        # n x N x mu
-        bubbles = vmap_vmap_bubble(self.bandwidth)
-        # print("bubbles shape: ", bubbles.shape)
+        # batch size x N x mu
+        bubbles = vmap_vmap_bubble(self.bandwidth_layer(encoded))
+        print("bubbles shape: ", bubbles.shape)
+        # batch size x n x N
         smoothed_basis = self.smooth_basis(bubbles=bubbles)
-        # return torch.matmul(encoded, self.decoder)
-        return torch.matmul(encoded, smoothed_basis)
+        # batch size x 1 x n
+        encoded = encoded.unsqueeze(2).permute((0, 2, 1))
+        # batch size x N
+        return torch.bmm(encoded, smoothed_basis).squeeze(1)
 
     def forward(self, x):
         return self.decode(self.encode(x))
@@ -57,20 +72,35 @@ class NRBS(torch.nn.Module):
     def convolve(self, x, bubble):
         return x * bubble
 
+    # def smooth_basis_not_of_u(self, bubbles):
+    #     node_idxs = torch.linspace(0, self.N - 1, self.N, dtype=torch.long)
+    #     return torch.stack(
+    #         [
+    #             self.smooth_vec(i, node_idx=node_idxs, bubbles=bubbles)
+    #             for i in range(self.n)
+    #         ]
+    #     ).squeeze(2)
+
+    # def smooth_vec_not_of_u(self, basis_idx, node_idx, bubbles):
+    #     return (
+    #         self.decoder[basis_idx][self.getNeighbours(node_idx)]
+    #         * bubbles[basis_idx][node_idx]
+    #     ).sum(dim=1, keepdims=True)
+
     def smooth_basis(self, bubbles):
         node_idxs = torch.linspace(0, self.N - 1, self.N, dtype=torch.long)
         return torch.stack(
             [
                 self.smooth_vec(i, node_idx=node_idxs, bubbles=bubbles)
                 for i in range(self.n)
-            ]
+            ],
+            dim=1,
         ).squeeze(2)
 
     def smooth_vec(self, basis_idx, node_idx, bubbles):
-        return (
-            self.decoder[basis_idx][self.getNeighbours(node_idx)]
-            * bubbles[basis_idx][node_idx]
-        ).sum(dim=1, keepdims=True)
+        return (self.decoder[basis_idx][self.getNeighbours(node_idx)] * bubbles).sum(
+            dim=2
+        )
 
     def smooth(self, basis_idx, node_idx, bubbles):
         return torch.sum(
