@@ -80,9 +80,11 @@ class NRBS(torch.nn.Module):
 
 
 class EncoderDecoder(torch.nn.Module):
-    def __init__(self, nrbs, device):
+    def __init__(self, N, n, mu, neighbours, device):
         super(EncoderDecoder, self).__init__()
-        self.nrbs = nrbs.to(device)
+        self.nrbs = NRBS(N=N, n=n, mu=mu, neighbours=neighbours, device=device).to(
+            device
+        )
         self.device = device
 
     def train(self, train_data_loader, epochs=1):
@@ -105,3 +107,6 @@ class EncoderDecoder(torch.nn.Module):
 
             torch.save(self.nrbs, "models/nrbs_" + str(i) + ".pth")
             print("Itr {:}, loss = {:}".format(i, curr_loss))
+
+    def forward(self, x):
+        return self.nrbs(x)
