@@ -13,6 +13,13 @@ def read_data(num_steps, num_nodes, file_base, var_name, file_extension=".csv"):
     return datas
 
 
+def u_dot(datas, dt):
+    u_n_plus_1 = datas[1:]
+    u_n = datas[:-1]
+    u_dot = (u_n_plus_1 - u_n) / dt
+    return u_dot
+
+
 def read_coords(file_name):
     file_name = file_name
     data = pd.read_csv(file_name)

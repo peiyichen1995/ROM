@@ -1,6 +1,8 @@
 import torch
 from functorch import vmap
 import tqdm
+import numpy as np
+import os
 
 torch.set_default_dtype(torch.float64)
 
@@ -22,7 +24,24 @@ class NRBS(torch.nn.Module):
         # self.bandwidth = torch.nn.Parameter(
         #     torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
         # )
+        # dims = [int(np.ceil(self.N / 2)), self.N]
+        # dims = [self.N]
+        # self.bandwidth_layers = []
+        # curr_dim = self.n
+        # for dim in dims:
+        #     self.bandwidth_layers.append(
+        #         torch.nn.Linear(curr_dim, dim, device=self.device)
+        #     )
+        #     curr_dim = dim
         self.bandwidth_layer = torch.nn.Linear(self.n, self.N, device=self.device)
+
+    def get_bandwidth(self, x):
+        # for i in range(len(self.bandwidth_layers) - 1):
+        #     x = self.bandwidth_layers[i](x)
+        #     x = torch.relu(x)
+        x = self.bandwidth_layers[-1](x)
+        x = torch.sigmoid(x)
+        return x
 
     def encode(self, x):
         return self.encoder(x)
@@ -42,7 +61,9 @@ class NRBS(torch.nn.Module):
         vmap_bubble = vmap(self.bubble, in_dims=0)
         vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
         # batch size x N x mu
+        # bubbles = vmap_vmap_bubble(self.get_bandwidth(encoded))
         bubbles = vmap_vmap_bubble(torch.sigmoid(self.bandwidth_layer(encoded)))
+
         # print("bubbles shape: ", bubbles.shape)
         # batch size x n x N
         smoothed_basis = self.smooth_basis(bubbles=bubbles)
@@ -119,9 +140,9 @@ class EncoderDecoder(torch.nn.Module):
 
     def train(self, train_data_loader, epochs=1):
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
+        optim = torch.optim.AdamW(self.nrbs.parameters(), 1e-6)
         loss_func = torch.nn.MSELoss(reduction="none")
-
+        best_loss = float("inf")
         for i in range(epochs):
             self.nrbs.train()
             curr_loss = 0
@@ -135,8 +156,11 @@ class EncoderDecoder(torch.nn.Module):
                 optim.step()
                 optim.zero_grad()
 
-            torch.save(self.nrbs, "models/nrbs_" + str(i) + ".pth")
             print("Itr {:}, loss = {:}".format(i, curr_loss))
+            if curr_loss < best_loss:
+                if os.path.isfile("models/nrbs.pth"):
+                    os.remove("models/nrbs.pth")
+                torch.save(self.nrbs, "models/nrbs.pth")
 
     def forward(self, x):
         return self.nrbs(x)
