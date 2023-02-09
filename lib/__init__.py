@@ -8,6 +8,7 @@ import interpolation
 import bc
 import torch
 import nrbs
+import nrbs_n_N
 import utils
 
 torch.set_default_dtype(torch.float64)
