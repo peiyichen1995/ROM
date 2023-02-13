@@ -117,9 +117,9 @@ class EncoderDecoder(torch.nn.Module):
 
             print("Itr {:}, loss = {:}".format(i, curr_loss))
             if curr_loss < best_loss:
-                if os.path.isfile("models/nrbs.pth"):
-                    os.remove("models/nrbs.pth")
-                torch.save(self.nrbs, "models/nrbs.pth")
+                if os.path.isfile("models/nrbs_n_N.pth"):
+                    os.remove("models/nrbs_n_N.pth")
+                torch.save(self.nrbs, "models/nrbs_n_N.pth")
 
     def forward(self, x):
         return self.nrbs(x)

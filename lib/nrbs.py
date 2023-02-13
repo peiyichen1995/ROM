@@ -24,21 +24,21 @@ class NRBS(torch.nn.Module):
         # self.bandwidth = torch.nn.Parameter(
         #     torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
         # )
-        # dims = [int(np.ceil(self.N / 2)), self.N]
+        dims = [int(np.ceil(self.N / 4)), int(np.ceil(self.N / 2)), self.N]
         # dims = [self.N]
-        # self.bandwidth_layers = []
-        # curr_dim = self.n
-        # for dim in dims:
-        #     self.bandwidth_layers.append(
-        #         torch.nn.Linear(curr_dim, dim, device=self.device)
-        #     )
-        #     curr_dim = dim
-        self.bandwidth_layer = torch.nn.Linear(self.n, self.N, device=self.device)
+        self.bandwidth_layers = []
+        curr_dim = self.n
+        for dim in dims:
+            self.bandwidth_layers.append(
+                torch.nn.Linear(curr_dim, dim, device=self.device)
+            )
+            curr_dim = dim
+        # self.bandwidth_layer = torch.nn.Linear(self.n, self.N, device=self.device)
 
     def get_bandwidth(self, x):
-        # for i in range(len(self.bandwidth_layers) - 1):
-        #     x = self.bandwidth_layers[i](x)
-        #     x = torch.relu(x)
+        for i in range(len(self.bandwidth_layers) - 1):
+            x = self.bandwidth_layers[i](x)
+            x = torch.sigmoid(x)
         x = self.bandwidth_layers[-1](x)
         x = torch.sigmoid(x)
         return x
@@ -61,8 +61,8 @@ class NRBS(torch.nn.Module):
         vmap_bubble = vmap(self.bubble, in_dims=0)
         vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
         # batch size x N x mu
-        # bubbles = vmap_vmap_bubble(self.get_bandwidth(encoded))
-        bubbles = vmap_vmap_bubble(torch.sigmoid(self.bandwidth_layer(encoded)))
+        bubbles = vmap_vmap_bubble(self.get_bandwidth(encoded))
+        # bubbles = vmap_vmap_bubble(torch.sigmoid(self.bandwidth_layer(encoded)))
 
         # print("bubbles shape: ", bubbles.shape)
         # batch size x n x N
@@ -140,7 +140,7 @@ class EncoderDecoder(torch.nn.Module):
 
     def train(self, train_data_loader, epochs=1):
 
-        optim = torch.optim.AdamW(self.nrbs.parameters(), 1e-6)
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
         loss_func = torch.nn.MSELoss(reduction="none")
         best_loss = float("inf")
         for i in range(epochs):
