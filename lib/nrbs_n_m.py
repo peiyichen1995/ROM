@@ -8,11 +8,12 @@ torch.set_default_dtype(torch.float64)
 
 # bandwidth: n x m
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n, mu, neighbours, group_indices, device):
+    def __init__(self, N, n, mu, m, neighbours, group_indices, device):
         super(NRBS, self).__init__()
         self.N = N
         self.n = n
         self.mu = mu
+        self.m = m
         self.neighbours = neighbours.to(device)
         self.group_indices = group_indices
         self.device = device
@@ -23,36 +24,52 @@ class NRBS(torch.nn.Module):
             torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
         )
 
-        self.bandwidth_layer = torch.nn.Linear(self.n, self.n, device=self.device)
+        self.bandwidth_layers = [
+            torch.nn.Linear(self.n, self.m, device=self.device) for i in range(self.n)
+        ]
 
-    def get_bandwidth(self, x):
-        for i in range(len(self.bandwidth_layers) - 1):
-            x = self.bandwidth_layers[i](x)
-            x = torch.sigmoid(x)
-        x = self.bandwidth_layers[-1](x)
-        x = torch.sigmoid(x)
-        return x
+    def get_bandwidth(self, encoded):
+        return torch.stack(
+            [torch.sigmoid(self.bandwidth_layers[i](encoded)) for i in range(self.n)],
+            dim=1,
+        )
 
     def encode(self, x):
         return self.encoder(x)
 
-    def decode(self, encoded):
-        vmap_bubble = vmap(self.bubble, in_dims=0)
-        vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
-        # batch size x n x mu
-        # bubbles = vmap_vmap_bubble(self.get_bandwidth(encoded))
-        bubbles = vmap_vmap_bubble(torch.sigmoid(self.bandwidth_layer(encoded)))
+    def get_group_idx_smoothed_basis(self, groud_idx, basises, bubbles):
+        curr_bubble = bubbles[:, :, groud_idx, :]
+        curr_basis = basises[:, self.group_indices[groud_idx], :]
+
+        # n x mu x N/m
+        curr_basis = curr_basis.permute((0, 2, 1))
 
         # n x batch x mu
-        bubbles = bubbles.permute((1, 0, 2))
+        curr_bubble = curr_bubble.permute((1, 0, 2))
+
+        # n x b x N/m
+        return torch.bmm(curr_bubble, curr_basis)
+
+    def decode(self, encoded):
+        batch_size = encoded.shape[0]
+        vmap_bubble = vmap(self.bubble, in_dims=0)
+        vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
+        vmap_vmap_vmap_bubble = vmap(vmap_vmap_bubble, in_dims=0)
+
+        # batch size x n x m x mu
+        bubbles = vmap_vmap_vmap_bubble(self.get_bandwidth(encoded))
 
         node_idxs = torch.linspace(0, self.N - 1, self.N, dtype=torch.long)
         basises = self.decoder[:, self.getNeighbours(node_idxs)]
-        # n x mu x N
-        basises = basises.permute((0, 2, 1))
 
-        # n x b x N
-        smoothed_basis = torch.bmm(bubbles, basises)
+        # n x batch_size x N
+        smoothed_basis = torch.zeros((self.n, batch_size, self.N), device=self.device)
+        for i in range(len(self.group_indices)):
+            # n x b x N/m
+            smoothed_basis[
+                :, :, self.group_indices[i]
+            ] = self.get_group_idx_smoothed_basis(i, basises, bubbles)
+
         # batch x n x N
         smoothed_basis = smoothed_basis.permute((1, 0, 2))
 
@@ -102,12 +119,13 @@ class NRBS(torch.nn.Module):
 
 
 class EncoderDecoder(torch.nn.Module):
-    def __init__(self, N, n, mu, neighbours, group_indices, device):
+    def __init__(self, N, n, mu, m, neighbours, group_indices, device):
         super(EncoderDecoder, self).__init__()
         self.nrbs = NRBS(
             N=N,
             n=n,
             mu=mu,
+            m=m,
             neighbours=neighbours,
             group_indices=group_indices,
             device=device,
