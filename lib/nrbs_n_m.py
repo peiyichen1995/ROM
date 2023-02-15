@@ -6,14 +6,15 @@ import os
 
 torch.set_default_dtype(torch.float64)
 
-# bandwidth: n x 1
+# bandwidth: n x m
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n, mu, neighbours, device):
+    def __init__(self, N, n, mu, neighbours, group_indices, device):
         super(NRBS, self).__init__()
         self.N = N
         self.n = n
         self.mu = mu
         self.neighbours = neighbours.to(device)
+        self.group_indices = group_indices
         self.device = device
 
         self.encoder = torch.nn.Linear(self.N, self.n, device=self.device)
@@ -101,11 +102,16 @@ class NRBS(torch.nn.Module):
 
 
 class EncoderDecoder(torch.nn.Module):
-    def __init__(self, N, n, mu, neighbours, device):
+    def __init__(self, N, n, mu, neighbours, group_indices, device):
         super(EncoderDecoder, self).__init__()
-        self.nrbs = NRBS(N=N, n=n, mu=mu, neighbours=neighbours, device=device).to(
-            device
-        )
+        self.nrbs = NRBS(
+            N=N,
+            n=n,
+            mu=mu,
+            neighbours=neighbours,
+            group_indices=group_indices,
+            device=device,
+        ).to(device)
         self.device = device
 
     def train(self, train_data_loader, epochs=1):
