@@ -134,7 +134,7 @@ class EncoderDecoder(torch.nn.Module):
 
     def train(self, train_data_loader, epochs=1):
 
-        optim = torch.optim.RMSprop(self.nrbs.parameters(), 1e-4)
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
         loss_func = torch.nn.MSELoss(reduction="none")
         best_loss = float("inf")
         for i in range(epochs):
@@ -152,9 +152,9 @@ class EncoderDecoder(torch.nn.Module):
 
             print("Itr {:}, loss = {:}".format(i, curr_loss))
             if curr_loss < best_loss:
-                if os.path.isfile("models/nrbs_n_1.pth"):
-                    os.remove("models/nrbs_n_1.pth")
-                torch.save(self.nrbs, "models/nrbs_n_1.pth")
+                if os.path.isfile("models/nrbs_n_m.pth"):
+                    os.remove("models/nrbs_n_m.pth")
+                torch.save(self.nrbs, "models/nrbs_n_m.pth")
 
     def forward(self, x):
         return self.nrbs(x)
