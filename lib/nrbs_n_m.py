@@ -132,7 +132,7 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def train(self, train_data_loader, epochs=1):
+    def train(self, train_data_loader, effective_batch=100, epochs=1):
 
         optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
         loss_func = torch.nn.MSELoss(reduction="none")
@@ -140,18 +140,21 @@ class EncoderDecoder(torch.nn.Module):
         for i in range(epochs):
             self.nrbs.train()
             curr_loss = 0
-            for x in tqdm.tqdm(train_data_loader):
+            accu_loss = 0
+            accu_itr = effective_batch // train_data_loader.batch_size
+            for j, x in enumerate(tqdm.tqdm(train_data_loader)):
                 x = x.to(self.device)
                 approximates = self.nrbs(x)
                 # loss = torch.sum(loss_func(x, approximates), dim=1)
                 loss = torch.sum(loss_func(x, approximates))
-                curr_loss = curr_loss + loss.item()
                 loss.backward()
-                optim.step()
-                optim.zero_grad()
-
-            print("Itr {:}, loss = {:}".format(i, curr_loss))
-            if curr_loss < best_loss:
+                curr_loss = curr_loss + loss
+                accu_loss = accu_loss + loss
+                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                    optim.step()
+                    optim.zero_grad()
+            print("Itr {:}, loss = {:}".format(i, accu_loss))
+            if accu_loss < best_loss:
                 if os.path.isfile("models/nrbs_n_m.pth"):
                     os.remove("models/nrbs_n_m.pth")
                 torch.save(self.nrbs, "models/nrbs_n_m.pth")
