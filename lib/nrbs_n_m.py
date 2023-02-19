@@ -24,19 +24,9 @@ class NRBS(torch.nn.Module):
             torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
         )
 
-        self.bandwidth_layers = test = torch.nn.Parameter(
+        self.bandwidth_layers = torch.nn.Parameter(
             torch.Tensor(self.n, self.n, self.m).uniform_(-0.01, 0.01),
             requires_grad=True,
-        )
-
-        # self.bandwidth_layers = [
-        #     torch.nn.Linear(self.n, self.m, device=self.device) for i in range(self.n)
-        # ]
-
-    def get_bandwidth(self, encoded):
-        return torch.stack(
-            [torch.sigmoid(self.bandwidth_layers[i](encoded)) for i in range(self.n)],
-            dim=1,
         )
 
     def encode(self, x):
@@ -144,7 +134,7 @@ class EncoderDecoder(torch.nn.Module):
 
     def train(self, train_data_loader, effective_batch=100, epochs=1):
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
         loss_func = torch.nn.MSELoss(reduction="none")
         best_loss = float("inf")
         for i in range(epochs):

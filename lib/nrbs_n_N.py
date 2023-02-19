@@ -22,9 +22,14 @@ class NRBS(torch.nn.Module):
             torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
         )
 
-        self.bandwidth_layers = [
-            torch.nn.Linear(self.n, self.N, device=self.device) for i in range(self.n)
-        ]
+        # self.bandwidth_layers = [
+        #     torch.nn.Linear(self.n, self.N, device=self.device) for i in range(self.n)
+        # ]
+
+        self.bandwidth_layers = torch.nn.Parameter(
+            torch.Tensor(self.n, self.n, self.N).uniform_(-0.01, 0.01),
+            requires_grad=True,
+        )
 
     def get_bandwidth(self, encoded):
         return torch.stack(
@@ -41,7 +46,15 @@ class NRBS(torch.nn.Module):
         vmap_vmap_vmap_bubble = vmap(vmap_vmap_bubble, in_dims=0)
         # batch size x N x mu
         # bubbles = vmap_vmap_bubble(self.get_bandwidth(encoded))
-        bubbles = vmap_vmap_vmap_bubble(self.get_bandwidth(encoded))
+        # bubbles = vmap_vmap_vmap_bubble(self.get_bandwidth(encoded))
+
+        # batch size x n x N
+        bandwidths = torch.bmm(
+            encoded.repeat(self.n, 1, 1), self.bandwidth_layers
+        ).permute(1, 0, 2)
+        bandwidths = torch.sigmoid(bandwidths)
+        # batch size x n x N x mu
+        bubbles = vmap_vmap_vmap_bubble(bandwidths)
 
         # print("bubbles shape: ", bubbles.shape)
         # batch size x n x N
