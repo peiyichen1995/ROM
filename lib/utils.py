@@ -44,5 +44,4 @@ def similarity_matrix(mat):
 
 def topk_neighbours(coords, k):
     sim = similarity_matrix(coords)
-    indices = torch.topk(sim, k, largest=False, sorted=True)[1]
-    return indices
+    return torch.topk(sim, k, largest=False, sorted=True)
