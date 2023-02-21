@@ -13,4 +13,6 @@ import nrbs_n_1
 import nrbs_n_m
 import utils
 
+import nrbs_test
+
 torch.set_default_dtype(torch.float64)
