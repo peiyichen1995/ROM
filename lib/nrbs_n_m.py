@@ -105,14 +105,26 @@ class NRBS(torch.nn.Module):
         # n x N
         bandwidths = bandwidths[:, self.clustering_labels]
 
-        # n x N
-        convolved_basis = self.convolve(
-            self.decoder,
-            self.neighbour_id,
-            self.neighbour_distance,
-            bandwidths,
-            self.mu,
+        # # n x N
+        # convolved_basis = self.convolve(
+        #     self.decoder,
+        #     self.neighbour_id,
+        #     self.neighbour_distance,
+        #     bandwidths,
+        #     self.mu,
+        # )
+
+        # n x N x mu
+        bubbles = self.bubble(self.neighbour_distance, bandwidths, self.mu)
+
+        convolved_basis = torch.stack(
+            [
+                torch.sum(self.decoder[i][self.neighbour_id] * bubbles[i], dim=-1)
+                for i in range(self.n)
+            ],
+            dim=0,
         )
+
         # batch size x N
         return torch.matmul(encoded, convolved_basis)
 
@@ -141,22 +153,22 @@ class EncoderDecoder(torch.nn.Module):
         loss_func = torch.nn.MSELoss(reduction="none")
         best_loss = float("inf")
 
-        # # L-BFGS
-        # def closure():
-        #     lbfgs.zero_grad()
-        #     approximates = self.nrbs(x)
-        #     objective = torch.sum(loss_func(x, approximates))
-        #     objective.backward(retain_graph=True)
-        #     return objective
+        # L-BFGS
+        def closure():
+            lbfgs.zero_grad()
+            approximates = self.nrbs(x)
+            objective = torch.sum(loss_func(x, approximates))
+            objective.backward(retain_graph=True)
+            return objective
 
-        # lbfgs = torch.optim.LBFGS(
-        #     self.nrbs.parameters(),
-        #     history_size=4,
-        #     max_iter=4,
-        #     line_search_fn="strong_wolfe",
-        # )
+        lbfgs = torch.optim.LBFGS(
+            self.nrbs.parameters(),
+            history_size=4,
+            max_iter=4,
+            line_search_fn="strong_wolfe",
+        )
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-2)
+        # optim = torch.optim.Adam(self.nrbs.parameters(), 1e-2)
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
@@ -164,17 +176,18 @@ class EncoderDecoder(torch.nn.Module):
             self.nrbs.train()
             curr_loss = 0
             for j, x in enumerate(tqdm.tqdm(train_data_loader)):
+                x = x.to(self.device)
                 approximates = self.nrbs(x)
-                # lbfgs.zero_grad()
+                lbfgs.zero_grad()
                 objective = torch.sum(loss_func(x, approximates))
                 objective.backward(retain_graph=True)
-                # lbfgs.step(closure)
+                lbfgs.step(closure)
 
-                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    optim.step()
-                    optim.zero_grad()
-                # optim.step()
-                # optim.zero_grad()
+                # if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                #     optim.step()
+                #     optim.zero_grad()
+                # # optim.step()
+                # # optim.zero_grad()
 
             self.nrbs.eval()
             for x in tqdm.tqdm(train_data_loader):
