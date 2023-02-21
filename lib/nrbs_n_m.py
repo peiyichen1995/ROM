@@ -21,22 +21,66 @@ class NRBS(torch.nn.Module):
         self.clustering_labels = clustering_labels
 
         self.encoder = torch.nn.Linear(self.N, self.n)
-        # self.decoder = torch.nn.Linear(self.n, self.N)
+        self.test_decoder = torch.nn.Linear(self.n, self.N)
         self.decoder = torch.nn.Parameter(torch.Tensor(self.n, self.N))
         self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m)
 
     def encode(self, x):
         return self.encoder(x)
 
+    # # distance: N x mu
+    # # w: b x n x N ([0 element_size])
+    # # mu: number of neighbour elements
+    # def bubble(self, neighbour_distance, w, mu):
+    #     b = w.shape[0]
+    #     window = torch.relu(
+    #         -(
+    #             neighbour_distance.unsqueeze(0).unsqueeze(0).expand(b, self.n, -1, -1)
+    #             ** 2
+    #         )
+    #         / (w.unsqueeze(-1) * mu) ** 2
+    #         + 1
+    #     )
+    #     window = window / torch.sum(window, dim=1, keepdim=True)
+    #     # n x N x mu
+    #     return window
+
+    # # x: n x N
+    # # neighbour_id: N x mu
+    # # w: b x n x N
+    # def convolve(self, x, neighbour_id, neighbour_distance, w, mu):
+    #     b = w.shape[0]
+    #     # b x n x N x mu
+    #     bubbles = self.bubble(neighbour_distance, w, mu)
+    #     return torch.sum(
+    #         x[:, neighbour_id].unsqueeze(0).expand(b, -1, -1, -1) * bubbles, dim=-1
+    #     )
+
+    # def decode(self, encoded):
+    #     # b x n x m
+    #     bandwidths = self.bandwidth_layers(encoded)
+    #     bandwidths = bandwidths.reshape(-1, self.n, self.m)
+
+    #     # b x n x N
+    #     bandwidths = bandwidths[:, :, self.clustering_labels]
+
+    #     # b x n x N
+    #     convolved_basis = self.convolve(
+    #         self.decoder,
+    #         self.neighbour_id,
+    #         self.neighbour_distance,
+    #         bandwidths,
+    #         self.mu,
+    #     )
+    #     # batch size x N
+    #     return torch.bmm(encoded.unsqueeze(1), convolved_basis).squeeze(1)
+
     # distance: N x mu
     # w: n x N ([0 element_size])
     # mu: number of neighbour elements
     def bubble(self, neighbour_distance, w, mu):
-        print(w.device)
-        print(neighbour_distance.device)
-        n = w.shape[0]
         window = torch.relu(
-            -(neighbour_distance.unsqueeze(0).expand(n, -1, -1) ** 2)
+            -(neighbour_distance.unsqueeze(0).expand(self.n, -1, -1) ** 2)
             / (w.unsqueeze(-1) * mu) ** 2
             + 1
         )
@@ -53,23 +97,24 @@ class NRBS(torch.nn.Module):
         return torch.sum(x[:, neighbour_id] * bubbles, dim=-1)
 
     def decode(self, encoded):
-        # n x m
-        bandwidths = self.bandwidth_layers(encoded)
-        bandwidths = bandwidths.reshape(self.n, self.m)
+        return self.test_decoder(encoded)
+        # # n x m
+        # bandwidths = torch.sigmoid(self.bandwidth_layers(encoded))
+        # bandwidths = bandwidths.reshape(self.n, self.m)
 
-        # n x N
-        bandwidths = bandwidths[:, self.clustering_labels]
+        # # n x N
+        # bandwidths = bandwidths[:, self.clustering_labels]
 
-        # n x N
-        convolved_basis = self.convolve(
-            self.decoder,
-            self.neighbour_id,
-            self.neighbour_distance,
-            bandwidths,
-            self.mu,
-        )
-        # batch size x N
-        return torch.matmul(encoded, convolved_basis)
+        # # n x N
+        # convolved_basis = self.convolve(
+        #     self.decoder,
+        #     self.neighbour_id,
+        #     self.neighbour_distance,
+        #     bandwidths,
+        #     self.mu,
+        # )
+        # # batch size x N
+        # return torch.matmul(encoded, convolved_basis)
 
     def forward(self, x):
         return self.decode(self.encode(x))
@@ -99,6 +144,7 @@ class EncoderDecoder(torch.nn.Module):
         # L-BFGS
         def closure():
             lbfgs.zero_grad()
+            approximates = self.nrbs(x)
             objective = torch.sum(loss_func(x, approximates))
             objective.backward(retain_graph=True)
             return objective
