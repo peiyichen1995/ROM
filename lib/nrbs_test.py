@@ -55,7 +55,7 @@ class NRBS(torch.nn.Module):
         bandwidths = torch.bmm(
             encoded.repeat(self.n, 1, 1), self.bandwidth_layers
         ).permute(1, 0, 2)
-        bandwidths = torch.sigmoid(bandwidths)
+        bandwidths = torch.sigmoid(bandwidths) / 60
         # batch size x n x m x mu
         bubbles = vmap_vmap_vmap_bubble(bandwidths)
 
@@ -134,49 +134,34 @@ class EncoderDecoder(torch.nn.Module):
 
     def train(self, train_data_loader, effective_batch=100, epochs=1):
 
-        # optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
-        loss_func = torch.nn.MSELoss(reduction="none")
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
+        loss_func = torch.nn.MSELoss(reduction="sum")
         best_loss = float("inf")
-
-        # L-BFGS
-        def closure():
-            lbfgs.zero_grad()
-            approximates = self.nrbs(x)
-            objective = torch.sum(loss_func(x, approximates))
-            objective.backward(retain_graph=True)
-            return objective
-
-        lbfgs = torch.optim.LBFGS(
-            self.nrbs.parameters(),
-            history_size=2,
-            max_iter=4,
-            line_search_fn="strong_wolfe",
-        )
+        self.nrbs.train()
+        accu_itr = effective_batch // train_data_loader.batch_size
 
         for i in range(epochs):
-            self.nrbs.train()
             curr_loss = 0
-            accu_itr = effective_batch // train_data_loader.batch_size
+
             for j, x in enumerate(tqdm.tqdm(train_data_loader)):
                 x = x.to(self.device)
-                approximates = self.nrbs(x)
-                # loss = torch.sum(loss_func(x, approximates), dim=1)
-                loss = torch.sum(loss_func(x, approximates))
+                approximates = self.nrbs(x[:, : self.nrbs.N])
+                loss = loss_func(x[:, self.nrbs.N :], approximates)
                 loss.backward()
-                lbfgs.step(closure)
-                lbfgs.zero_grad()
-            self.nrbs.eval()
-            for x in tqdm.tqdm(train_data_loader):
-                x = x.to(self.device)
-                approximates = self.nrbs(x)
-                objective = torch.sum(loss_func(x, approximates))
-                curr_loss = curr_loss + objective.item()
-
-            print("Itr {:}, loss = {:}".format(i, curr_loss))
+                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                    optim.step()
+                    optim.zero_grad()
+            with torch.no_grad():
+                for x in tqdm.tqdm(train_data_loader):
+                    x = x.to(self.device)
+                    approximates = self.nrbs(x)
+                    loss = loss_func(x, approximates)
+                    curr_loss = curr_loss + loss.item()
+            print("Itr {:}, loss = {:}".format(i, curr_loss / 1001))
             if curr_loss < best_loss:
-                if os.path.isfile("models/nrbs_n_m.pth"):
-                    os.remove("models/nrbs_n_m.pth")
-                torch.save(self.nrbs, "models/nrbs_n_m.pth")
+                if os.path.isfile("models/nrbs_n_m_test.pth"):
+                    os.remove("models/nrbs_n_m_test.pth")
+                torch.save(self.nrbs, "models/nrbs_n_m_test.pth")
 
     def forward(self, x):
         return self.nrbs(x)
