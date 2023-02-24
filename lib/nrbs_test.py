@@ -134,7 +134,7 @@ class EncoderDecoder(torch.nn.Module):
 
     def train(self, train_data_loader, effective_batch=100, epochs=1):
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-5)
         loss_func = torch.nn.MSELoss(reduction="sum")
         best_loss = float("inf")
         self.nrbs.train()
@@ -154,8 +154,8 @@ class EncoderDecoder(torch.nn.Module):
             with torch.no_grad():
                 for x in tqdm.tqdm(train_data_loader):
                     x = x.to(self.device)
-                    approximates = self.nrbs(x)
-                    loss = loss_func(x, approximates)
+                    approximates = self.nrbs(x[:, : self.nrbs.N])
+                    loss = loss_func(x[:, self.nrbs.N :], approximates)
                     curr_loss = curr_loss + loss.item()
             print("Itr {:}, loss = {:}".format(i, curr_loss / 1001))
             if curr_loss < best_loss:

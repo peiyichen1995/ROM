@@ -3,6 +3,7 @@ from functorch import vmap
 import tqdm
 import numpy as np
 import os
+import pdb
 
 torch.set_default_dtype(torch.float64)
 
@@ -20,7 +21,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder = torch.nn.Linear(self.N, self.n)
+        self.encoder = torch.nn.Linear(self.N, self.n, bias=False)
+        self.linear_decoder = torch.nn.Linear(self.n, self.N, bias=False)
         self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
         self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m)
 
@@ -46,10 +48,12 @@ class NRBS(torch.nn.Module):
     # w: n x N
     def convolve(self, x, neighbour_id, neighbour_distance, w, mu):
         # n x N x mu
+        # 1.3GB
         bubbles = self.bubble(neighbour_distance, w, mu)
         return torch.sum(x[:, neighbour_id] * bubbles, dim=-1)
 
     def decode(self, encoded):
+        # return self.linear_decoder(encoded)
         b = encoded.shape[0]
 
         convolved_basis = torch.empty((b, self.n, self.N), device=encoded.device)
@@ -65,8 +69,6 @@ class NRBS(torch.nn.Module):
                 bandwidths,
                 self.mu,
             )
-
-        # zhi hou zhu pi jiang zen me sheng memory
 
         # batch size x N
         return torch.bmm(encoded.unsqueeze(1), convolved_basis).squeeze(1)
@@ -91,7 +93,7 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def train(self, train_data_loader, effective_batch=100, epochs=1):
+    def train(self, train_data_loader, effective_batch=64, epochs=1):
 
         loss_func = torch.nn.MSELoss(reduction="sum")
         best_loss = float("inf")
@@ -99,8 +101,8 @@ class EncoderDecoder(torch.nn.Module):
         # # L-BFGS
         # def closure():
         #     lbfgs.zero_grad()
-        #     approximates = self.nrbs(x)
-        #     objective = loss_func(x, approximates)
+        #     approximates = self.nrbs(x[:, : self.nrbs.N])
+        #     objective = loss_func(x[:, self.nrbs.N :], approximates)
         #     objective.backward()
         #     return objective
 
@@ -113,6 +115,8 @@ class EncoderDecoder(torch.nn.Module):
 
         optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
 
+        accu_itr = effective_batch // train_data_loader.batch_size
+
         for i in range(epochs):
             curr_loss = 0
             for j, x in enumerate(tqdm.tqdm(train_data_loader)):
@@ -122,8 +126,10 @@ class EncoderDecoder(torch.nn.Module):
                 loss.backward()
                 # lbfgs.step(closure)
 
-            optim.step()
-            optim.zero_grad()
+                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                    optim.step()
+                    optim.zero_grad()
+                torch.cuda.empty_cache()
 
             with torch.no_grad():
                 for x in tqdm.tqdm(train_data_loader):
@@ -131,7 +137,11 @@ class EncoderDecoder(torch.nn.Module):
                     loss = loss_func(x[:, self.nrbs.N :], approximates)
                     curr_loss = curr_loss + loss.item()
 
-            print("Itr {:}, loss = {:}".format(i, curr_loss / 1001))
+            print(
+                "Itr {:}, loss = {:}".format(
+                    i, curr_loss / 1001 * train_data_loader.batch_size
+                )
+            )
             if curr_loss < best_loss:
                 if os.path.isfile("models/nrbs_n_m.pth"):
                     os.remove("models/nrbs_n_m.pth")
