@@ -23,7 +23,7 @@ class NRBS(torch.nn.Module):
 
         torch.manual_seed(0)
 
-        self.encoder = torch.nn.Linear(self.N, self.n, bias=False)
+        self.encoder = torch.nn.Linear(self.N, self.n)
         # self.linear_decoder = torch.nn.Linear(self.n, self.N, bias=False)
         self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
         self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m, bias=False)
@@ -62,7 +62,7 @@ class NRBS(torch.nn.Module):
 
         for i in range(b):
             bandwidths = torch.sigmoid(self.bandwidth_layers(encoded[i]))
-            bandwidths = (1 / 60 - 4 / 60 / self.mu) * bandwidths + 4 / 60 / self.mu
+            bandwidths = (1 / 60 - 2 / 60 / self.mu) * bandwidths + 2 / 60 / self.mu
             bandwidths = bandwidths.reshape(self.n, self.m)
             bandwidths = bandwidths[:, self.clustering_labels]
             convolved_basis[i] = self.convolve(
@@ -117,7 +117,7 @@ class EncoderDecoder(torch.nn.Module):
         #     lr=1,
         # )
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
@@ -152,6 +152,7 @@ class EncoderDecoder(torch.nn.Module):
 
             print("Itr {:}, loss = {:}".format(i, curr_loss / 1000))
             if curr_loss < best_loss:
+                best_loss = curr_loss
                 if os.path.isfile("models/nrbs_n_m.pth"):
                     os.remove("models/nrbs_n_m.pth")
                 torch.save(self.nrbs, "models/nrbs_n_m.pth")

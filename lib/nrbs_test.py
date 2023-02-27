@@ -34,35 +34,13 @@ class NRBS(torch.nn.Module):
         torch.manual_seed(0)
 
         self.encoder = torch.nn.Linear(self.N, self.n, bias=False)
-        # self.decoder = torch.nn.Linear(self.n, self.N)
-        # self.decoder = torch.nn.Parameter(
-        #     torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
-        # )
 
         self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
-
-        # self.bandwidth_layers = torch.nn.Parameter(
-        #     torch.Tensor(self.n, self.n * self.m).uniform_(-0.01, 0.01),
-        #     requires_grad=True,
-        # )
 
         self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m, bias=False)
 
     def encode(self, x):
         return self.encoder(x)
-
-    def get_group_idx_smoothed_basis(self, groud_idx, basises, bubbles):
-        curr_bubble = bubbles[:, :, groud_idx, :]
-        curr_basis = basises[:, self.group_indices[groud_idx], :]
-
-        # n x mu x N/m
-        curr_basis = curr_basis.permute((0, 2, 1))
-
-        # n x batch x mu
-        curr_bubble = curr_bubble.permute((1, 0, 2))
-
-        # n x b x N/m
-        return torch.bmm(curr_bubble, curr_basis)
 
     def decode(self, encoded):
         batch_size = encoded.shape[0]
@@ -120,39 +98,6 @@ class NRBS(torch.nn.Module):
         # b x n x N/m x mu
         return window
 
-    # def bubble(self, w):
-    #     x = torch.arange(self.mu, device=self.device)
-    #     window = torch.relu(-(x**2) / (w * self.mu) ** 2 + 1)
-    #     window = window / torch.sum(window)
-    #     return window
-
-    def getNeighbours(self, idx):
-        return self.neighbours[idx]
-
-    def convolve(self, x, bubble):
-        return x * bubble
-
-    def smooth_basis(self, bubbles):
-        node_idxs = torch.linspace(0, self.N - 1, self.N, dtype=torch.long)
-        return torch.stack(
-            [
-                self.smooth_vec(i, node_idx=node_idxs, bubbles=bubbles)
-                for i in range(self.n)
-            ],
-            dim=1,
-        ).squeeze(2)
-
-    def smooth_vec(self, basis_idx, node_idx, bubbles):
-        return (self.decoder[basis_idx][self.getNeighbours(node_idx)] * bubbles).sum(
-            dim=2
-        )
-
-    def smooth(self, basis_idx, node_idx, bubbles):
-        return torch.sum(
-            self.decoder[basis_idx][self.getNeighbours(node_idx)]
-            * bubbles[basis_idx][node_idx]
-        )
-
 
 class EncoderDecoder(torch.nn.Module):
     def __init__(
@@ -208,6 +153,7 @@ class EncoderDecoder(torch.nn.Module):
                     curr_loss = curr_loss + loss.item()
             print("Itr {:}, loss = {:}".format(i, curr_loss / 1000))
             if curr_loss < best_loss:
+                best_loss = curr_loss
                 if os.path.isfile("models/nrbs_n_m_test.pth"):
                     os.remove("models/nrbs_n_m_test.pth")
                 torch.save(self.nrbs, "models/nrbs_n_m_test.pth")
