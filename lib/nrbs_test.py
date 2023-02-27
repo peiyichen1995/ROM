@@ -8,26 +8,45 @@ torch.set_default_dtype(torch.float64)
 
 # bandwidth: n x m
 class NRBS(torch.nn.Module):
-    def __init__(self, N, n, mu, m, neighbours, group_indices, device):
+    def __init__(
+        self,
+        N,
+        n,
+        mu,
+        m,
+        neighbour_id,
+        neighbour_distance,
+        clustering_labels,
+        group_indices,
+        device,
+    ):
         super(NRBS, self).__init__()
         self.N = N
         self.n = n
         self.mu = mu
         self.m = m
-        self.neighbours = neighbours.to(device)
+        self.neighbour_id = neighbour_id.to(device)
+        self.neighbour_distance = neighbour_distance.to(device)
+        self.clustering_labels = clustering_labels.to(device)
         self.group_indices = group_indices
         self.device = device
 
-        self.encoder = torch.nn.Linear(self.N, self.n, device=self.device)
-        # self.decoder = torch.nn.Linear(self.n, self.N)
-        self.decoder = torch.nn.Parameter(
-            torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
-        )
+        torch.manual_seed(0)
 
-        self.bandwidth_layers = torch.nn.Parameter(
-            torch.Tensor(self.n, self.n, self.m).uniform_(-0.01, 0.01),
-            requires_grad=True,
-        )
+        self.encoder = torch.nn.Linear(self.N, self.n, bias=False)
+        # self.decoder = torch.nn.Linear(self.n, self.N)
+        # self.decoder = torch.nn.Parameter(
+        #     torch.Tensor(self.n, self.N).uniform_(-0.01, 0.01), requires_grad=True
+        # )
+
+        self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
+
+        # self.bandwidth_layers = torch.nn.Parameter(
+        #     torch.Tensor(self.n, self.n * self.m).uniform_(-0.01, 0.01),
+        #     requires_grad=True,
+        # )
+
+        self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m, bias=False)
 
     def encode(self, x):
         return self.encoder(x)
@@ -47,34 +66,36 @@ class NRBS(torch.nn.Module):
 
     def decode(self, encoded):
         batch_size = encoded.shape[0]
-        vmap_bubble = vmap(self.bubble, in_dims=0)
-        vmap_vmap_bubble = vmap(vmap_bubble, in_dims=0)
-        vmap_vmap_vmap_bubble = vmap(vmap_vmap_bubble, in_dims=0)
 
-        # batch size x n x m
-        bandwidths = torch.bmm(
-            encoded.repeat(self.n, 1, 1), self.bandwidth_layers
-        ).permute(1, 0, 2)
-        bandwidths = torch.sigmoid(bandwidths) / 60
-        # batch size x n x m x mu
-        bubbles = vmap_vmap_vmap_bubble(bandwidths)
+        # b x n x m
+        bandwidths = torch.sigmoid(self.bandwidth_layers(encoded))
+        bandwidths = (1 / 60 - 10 / 60 / self.mu) * bandwidths + 10 / 60 / self.mu
+        bandwidths = bandwidths.reshape(-1, self.n, self.m)
+        # b x n x N
+        bandwidths = bandwidths[:, :, self.clustering_labels]
 
-        node_idxs = torch.linspace(0, self.N - 1, self.N, dtype=torch.long)
-        basises = self.decoder[:, self.getNeighbours(node_idxs)]
+        # n x N x mu
+        basises = self.decoder.weight[:, self.neighbour_id]
 
-        # n x batch_size x N
-        smoothed_basis = torch.zeros((self.n, batch_size, self.N), device=self.device)
+        # b x n x N
+        smoothed_basis = torch.empty((batch_size, self.n, self.N), device=self.device)
         for i in range(len(self.group_indices)):
-            # n x b x N/m
-            smoothed_basis[
-                :, :, self.group_indices[i]
-            ] = self.get_group_idx_smoothed_basis(i, basises, bubbles)
-
-        # batch x n x N
-        smoothed_basis = smoothed_basis.permute((1, 0, 2))
-
-        # # batch size x n x N
-        # smoothed_basis = self.smooth_basis(bubbles=bubbles)
+            # b x n x N/m x mu
+            bubbles = self.bubble(
+                self.neighbour_distance[self.group_indices[i], :],
+                bandwidths[:, :, self.group_indices[i]],
+                self.mu,
+            )
+            # b x n x N/m
+            smoothed_basis[:, :, self.group_indices[i]] = torch.sum(
+                (
+                    (basises[:, self.group_indices[i], :])
+                    .unsqueeze(0)
+                    .expand(batch_size, -1, -1, -1)
+                )
+                * bubbles,
+                dim=-1,
+            )
 
         # batch size x 1 x n
         encoded = encoded.unsqueeze(2).permute((0, 2, 1))
@@ -84,11 +105,26 @@ class NRBS(torch.nn.Module):
     def forward(self, x):
         return self.decode(self.encode(x))
 
-    def bubble(self, w):
-        x = torch.arange(self.mu, device=self.device)
-        window = torch.relu(-(x**2) / (w * self.mu) ** 2 + 1)
-        window = window / torch.sum(window)
+    # distance: N/m x mu
+    # w: b x n x N/m ([0 element_size])
+    # mu: number of neighbour elements
+    def bubble(self, distance, w, mu):
+        b = w.shape[0]
+        n = w.shape[1]
+        window = torch.relu(
+            -(distance.unsqueeze(0).unsqueeze(0).expand(b, n, -1, -1) ** 2)
+            / (w.unsqueeze(-1) * mu) ** 2
+            + 1
+        )
+        window = window / torch.sum(window, dim=-1, keepdim=True)
+        # b x n x N/m x mu
         return window
+
+    # def bubble(self, w):
+    #     x = torch.arange(self.mu, device=self.device)
+    #     window = torch.relu(-(x**2) / (w * self.mu) ** 2 + 1)
+    #     window = window / torch.sum(window)
+    #     return window
 
     def getNeighbours(self, idx):
         return self.neighbours[idx]
@@ -119,14 +155,27 @@ class NRBS(torch.nn.Module):
 
 
 class EncoderDecoder(torch.nn.Module):
-    def __init__(self, N, n, mu, m, neighbours, group_indices, device):
+    def __init__(
+        self,
+        N,
+        n,
+        mu,
+        m,
+        neighbour_id,
+        neighbour_distance,
+        clustering_labels,
+        group_indices,
+        device,
+    ):
         super(EncoderDecoder, self).__init__()
         self.nrbs = NRBS(
             N=N,
             n=n,
             mu=mu,
             m=m,
-            neighbours=neighbours,
+            neighbour_id=neighbour_id,
+            neighbour_distance=neighbour_distance,
+            clustering_labels=clustering_labels,
             group_indices=group_indices,
             device=device,
         ).to(device)

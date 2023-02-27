@@ -21,10 +21,12 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
+        torch.manual_seed(0)
+
         self.encoder = torch.nn.Linear(self.N, self.n, bias=False)
-        self.linear_decoder = torch.nn.Linear(self.n, self.N, bias=False)
+        # self.linear_decoder = torch.nn.Linear(self.n, self.N, bias=False)
         self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
-        self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m)
+        self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m, bias=False)
 
     def encode(self, x):
         return self.encoder(x)
@@ -39,7 +41,7 @@ class NRBS(torch.nn.Module):
             / (w.unsqueeze(-1) * mu) ** 2
             + 1
         )
-        window = window / torch.sum(window, dim=1, keepdim=True)
+        window = window / torch.sum(window, dim=2, keepdim=True)
         # n x N x mu
         return window
 
@@ -60,6 +62,7 @@ class NRBS(torch.nn.Module):
 
         for i in range(b):
             bandwidths = torch.sigmoid(self.bandwidth_layers(encoded[i]))
+            bandwidths = (1 / 60 - 4 / 60 / self.mu) * bandwidths + 4 / 60 / self.mu
             bandwidths = bandwidths.reshape(self.n, self.m)
             bandwidths = bandwidths[:, self.clustering_labels]
             convolved_basis[i] = self.convolve(
@@ -108,22 +111,32 @@ class EncoderDecoder(torch.nn.Module):
 
         # lbfgs = torch.optim.LBFGS(
         #     self.nrbs.parameters(),
-        #     history_size=10,
-        #     max_iter=20,
+        #     history_size=20,
+        #     max_iter=10,
         #     line_search_fn="strong_wolfe",
+        #     lr=1,
         # )
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
+        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-3)
 
         accu_itr = effective_batch // train_data_loader.batch_size
+
+        curr_loss = 0
+        with torch.no_grad():
+            for x in tqdm.tqdm(train_data_loader):
+                approximates = self.nrbs(x[:, : self.nrbs.N])
+                loss = loss_func(x[:, self.nrbs.N :], approximates)
+                curr_loss = curr_loss + loss.item()
+
+        print("Loss = {:}".format(curr_loss / 1001 * train_data_loader.batch_size))
 
         for i in range(epochs):
             curr_loss = 0
             for j, x in enumerate(tqdm.tqdm(train_data_loader)):
                 # lbfgs.zero_grad()
                 approximates = self.nrbs(x[:, : self.nrbs.N])
-                loss = loss_func(x[:, self.nrbs.N :], approximates)
-                loss.backward()
+                objective = loss_func(x[:, self.nrbs.N :], approximates)
+                objective.backward()
                 # lbfgs.step(closure)
 
                 if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
