@@ -69,7 +69,7 @@ class NRBS(torch.nn.Module):
 
         # b x n x m
         bandwidths = torch.sigmoid(self.bandwidth_layers(encoded))
-        bandwidths = (1 / 60 - 10 / 60 / self.mu) * bandwidths + 10 / 60 / self.mu
+        bandwidths = (1 / 60 - 4 / 60 / self.mu) * bandwidths + 4 / 60 / self.mu
         bandwidths = bandwidths.reshape(-1, self.n, self.m)
         # b x n x N
         bandwidths = bandwidths[:, :, self.clustering_labels]
@@ -181,7 +181,7 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def train(self, train_data_loader, effective_batch=100, epochs=1):
+    def train(self, train_data_loader, effective_batch=200, epochs=1):
 
         optim = torch.optim.Adam(self.nrbs.parameters(), 1e-5)
         loss_func = torch.nn.MSELoss(reduction="sum")
@@ -206,7 +206,7 @@ class EncoderDecoder(torch.nn.Module):
                     approximates = self.nrbs(x[:, : self.nrbs.N])
                     loss = loss_func(x[:, self.nrbs.N :], approximates)
                     curr_loss = curr_loss + loss.item()
-            print("Itr {:}, loss = {:}".format(i, curr_loss / 1001))
+            print("Itr {:}, loss = {:}".format(i, curr_loss / 1000))
             if curr_loss < best_loss:
                 if os.path.isfile("models/nrbs_n_m_test.pth"):
                     os.remove("models/nrbs_n_m_test.pth")

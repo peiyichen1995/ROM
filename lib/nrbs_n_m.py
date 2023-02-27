@@ -128,7 +128,7 @@ class EncoderDecoder(torch.nn.Module):
                 loss = loss_func(x[:, self.nrbs.N :], approximates)
                 curr_loss = curr_loss + loss.item()
 
-        print("Loss = {:}".format(curr_loss / 1001 * train_data_loader.batch_size))
+        print("Loss = {:}".format(curr_loss / 1000))
 
         for i in range(epochs):
             curr_loss = 0
@@ -150,11 +150,7 @@ class EncoderDecoder(torch.nn.Module):
                     loss = loss_func(x[:, self.nrbs.N :], approximates)
                     curr_loss = curr_loss + loss.item()
 
-            print(
-                "Itr {:}, loss = {:}".format(
-                    i, curr_loss / 1001 * train_data_loader.batch_size
-                )
-            )
+            print("Itr {:}, loss = {:}".format(i, curr_loss / 1000))
             if curr_loss < best_loss:
                 if os.path.isfile("models/nrbs_n_m.pth"):
                     os.remove("models/nrbs_n_m.pth")
