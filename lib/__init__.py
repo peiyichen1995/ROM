@@ -15,5 +15,6 @@ import utils
 
 import nrbs_test
 import nrbs_no_convolve
+import nrbs_N
 
 torch.set_default_dtype(torch.float64)

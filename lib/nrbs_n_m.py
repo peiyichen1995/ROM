@@ -23,13 +23,18 @@ class NRBS(torch.nn.Module):
 
         torch.manual_seed(0)
 
-        self.encoder = torch.nn.Linear(self.N, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 6000)
+        self.encoder2 = torch.nn.Linear(6000, self.n)
+
         # self.linear_decoder = torch.nn.Linear(self.n, self.N, bias=False)
         self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
         self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m, bias=False)
 
     def encode(self, x):
-        return self.encoder(x)
+        x = self.encoder1(x)
+        x = x * torch.sigmoid(x)
+        x = self.encoder2(x)
+        return x
 
     # distance: N x mu
     # w: n x N ([0 element_size])
@@ -117,7 +122,8 @@ class EncoderDecoder(torch.nn.Module):
         #     lr=1,
         # )
 
-        optim = torch.optim.Adam(self.nrbs.parameters(), 1e-4)
+        lr = 1e-4
+        optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
@@ -130,6 +136,7 @@ class EncoderDecoder(torch.nn.Module):
 
         print("Loss = {:}".format(curr_loss / 1000))
 
+        patience = 0
         for i in range(epochs):
             curr_loss = 0
             for j, x in enumerate(tqdm.tqdm(train_data_loader)):
@@ -153,9 +160,15 @@ class EncoderDecoder(torch.nn.Module):
             print("Itr {:}, loss = {:}".format(i, curr_loss / 1000))
             if curr_loss < best_loss:
                 best_loss = curr_loss
-                if os.path.isfile("models/nrbs_n_m.pth"):
-                    os.remove("models/nrbs_n_m.pth")
-                torch.save(self.nrbs, "models/nrbs_n_m.pth")
+                if os.path.isfile("models/nrbs_n_m_more_layers.pth"):
+                    os.remove("models/nrbs_n_m_more_layers.pth")
+                torch.save(self.nrbs, "models/nrbs_n_m_more_layers.pth")
+            else:
+                patience = patience + 1
+            if patience == 40:
+                patience = 0
+                lr = lr / 5
+                optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
     def forward(self, x):
         return self.nrbs(x)
