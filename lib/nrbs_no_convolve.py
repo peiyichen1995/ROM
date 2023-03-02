@@ -18,7 +18,8 @@ class NRBS(torch.nn.Module):
         self.encoder1 = torch.nn.Linear(self.N, 6728)
         self.encoder2 = torch.nn.Linear(6728, self.n)
 
-        self.decoder = torch.nn.Linear(self.n, self.N)
+        self.decoder1 = torch.nn.Linear(self.n, 3373)
+        self.decoder2 = torch.nn.Linear(3373, self.N)
 
     def encode(self, x):
         x = self.encoder1(x)
@@ -26,7 +27,7 @@ class NRBS(torch.nn.Module):
         return self.encoder2(x)
 
     def decode(self, encoded):
-        return self.decoder(encoded)
+        return self.decoder2(self.decoder1(encoded))
 
     def forward(self, x):
         return self.decode(self.encode(x))

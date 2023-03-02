@@ -21,20 +21,13 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        torch.manual_seed(0)
+        self.encoder = torch.nn.Linear(self.N, self.n)
 
-        self.encoder1 = torch.nn.Linear(self.N, 6000)
-        self.encoder2 = torch.nn.Linear(6000, self.n)
-
-        # self.linear_decoder = torch.nn.Linear(self.n, self.N, bias=False)
         self.decoder = torch.nn.Linear(self.N, self.n, bias=False)
-        self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m, bias=False)
+        self.bandwidth_layers = torch.nn.Linear(self.n, self.n * self.m)
 
     def encode(self, x):
-        x = self.encoder1(x)
-        x = x * torch.sigmoid(x)
-        x = self.encoder2(x)
-        return x
+        return self.encoder(x)
 
     # distance: N x mu
     # w: n x N ([0 element_size])
@@ -70,6 +63,7 @@ class NRBS(torch.nn.Module):
             bandwidths = (1 / 60 - 2 / 60 / self.mu) * bandwidths + 2 / 60 / self.mu
             bandwidths = bandwidths.reshape(self.n, self.m)
             bandwidths = bandwidths[:, self.clustering_labels]
+
             convolved_basis[i] = self.convolve(
                 self.decoder.weight,
                 self.neighbour_id,
@@ -77,6 +71,12 @@ class NRBS(torch.nn.Module):
                 bandwidths,
                 self.mu,
             )
+            # bubbles = self.bubbles(encoded[i])
+            # bubbles = bubbles.reshape(self.n, self.m, self.mu)
+            # bubbles = bubbles[:, self.clustering_labels, :]
+            # convolved_basis[i] = torch.sum(
+            #     self.decoder.weight[:, self.neighbour_id] * bubbles, dim=-1
+            # )
 
         # batch size x N
         return torch.bmm(encoded.unsqueeze(1), convolved_basis).squeeze(1)
@@ -104,7 +104,7 @@ class EncoderDecoder(torch.nn.Module):
     def train(self, train_data_loader, effective_batch=64, epochs=1):
 
         loss_func = torch.nn.MSELoss(reduction="sum")
-        best_loss = float("inf")
+        model_name = "models/n_m_500.pth"
 
         # # L-BFGS
         # def closure():
@@ -122,19 +122,19 @@ class EncoderDecoder(torch.nn.Module):
         #     lr=1,
         # )
 
-        lr = 1e-4
+        lr = 1e-3
         optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
-        curr_loss = 0
+        best_loss = 0
         with torch.no_grad():
             for x in tqdm.tqdm(train_data_loader):
                 approximates = self.nrbs(x[:, : self.nrbs.N])
                 loss = loss_func(x[:, self.nrbs.N :], approximates)
-                curr_loss = curr_loss + loss.item()
+                best_loss = best_loss + loss.item()
 
-        print("Loss = {:}".format(curr_loss / 1000))
+        print("Loss = {:}".format(best_loss / 1000))
 
         patience = 0
         for i in range(epochs):
@@ -157,18 +157,22 @@ class EncoderDecoder(torch.nn.Module):
                     loss = loss_func(x[:, self.nrbs.N :], approximates)
                     curr_loss = curr_loss + loss.item()
 
-            print("Itr {:}, loss = {:}".format(i, curr_loss / 1000))
             if curr_loss < best_loss:
                 best_loss = curr_loss
-                if os.path.isfile("models/nrbs_n_m_more_layers.pth"):
-                    os.remove("models/nrbs_n_m_more_layers.pth")
-                torch.save(self.nrbs, "models/nrbs_n_m_more_layers.pth")
+                if os.path.isfile(model_name):
+                    os.remove(model_name)
+                torch.save(self.nrbs, model_name)
             else:
                 patience = patience + 1
             if patience == 40:
                 patience = 0
                 lr = lr / 5
                 optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
+            print(
+                "Itr {:}, curr_loss = {:}, best_loss = {:}, lr = {:}".format(
+                    i, curr_loss / 1000, best_loss / 1000, lr
+                )
+            )
 
     def forward(self, x):
         return self.nrbs(x)
