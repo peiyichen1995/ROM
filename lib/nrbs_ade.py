@@ -20,6 +20,11 @@ class NRBS(torch.nn.Module):
         self.decoder1 = torch.nn.Linear(self.n, 33730)
         self.decoder2 = torch.nn.Linear(33730, self.N)
 
+        torch.nn.init.kaiming_normal_(self.encoder1.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.encoder2.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.decoder1.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.decoder2.weight, mode="fan_out")
+
     def encode(self, x):
         x = self.encoder1(x)
         x = torch.sigmoid(x)
@@ -73,7 +78,7 @@ class EncoderDecoder(torch.nn.Module):
         #     lr=1,
         # )
 
-        lr = 1e-3
+        lr = 1e-4
         optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
         accu_itr = effective_batch // train_data_loader.batch_size
@@ -85,7 +90,11 @@ class EncoderDecoder(torch.nn.Module):
                 loss = loss_func(u, approximates)
                 best_loss = best_loss + loss.item()
 
-        print("Initial loss = {:}".format(best_loss / len(train_data_loader)))
+        print(
+            "Initial loss = {:}".format(
+                best_loss / len(train_data_loader) / train_data_loader.batch_size
+            )
+        )
 
         patience = 0
         for i in range(epochs):
@@ -124,8 +133,8 @@ class EncoderDecoder(torch.nn.Module):
             print(
                 "Itr {:}, curr_loss = {:}, best_loss = {:}, lr = {:}".format(
                     i,
-                    curr_loss / len(train_data_loader),
-                    best_loss / len(train_data_loader),
+                    curr_loss / len(train_data_loader) / train_data_loader.batch_size,
+                    best_loss / len(train_data_loader) / train_data_loader.batch_size,
                     lr,
                 )
             )

@@ -45,6 +45,10 @@ class NRBS(torch.nn.Module):
 
         self.B = torch.nn.Parameter(torch.tensor([B0]))
 
+        torch.nn.init.kaiming_normal_(self.encoder1.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.encoder2.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.decoder.weight, mode="fan_out")
+
     def hotness(self, x):
         for i in range(len(self.m) - 1):
             x = self.hotness_map[i](x)
@@ -145,7 +149,7 @@ class EncoderDecoder(torch.nn.Module):
     def train(self, train_data_loader, effective_batch=64, epochs=1):
         writer = SummaryWriter()
         loss_func = torch.nn.MSELoss(reduction="sum")
-        model_name = "models/n_m_hot_map_200_200.pth"
+        model_name = "models/n_m_hot_map_200_200_kaiming_N_10.pth"
 
         # # L-BFGS
         # def closure():
@@ -183,17 +187,17 @@ class EncoderDecoder(torch.nn.Module):
         patience = 0
         for i in range(epochs):
             curr_loss = 0
-            for j, u in enumerate(tqdm.tqdm(train_data_loader)):
+            for j, u in enumerate(train_data_loader):
 
                 approximates = self.nrbs(u)
                 objective = loss_func(u, approximates)
                 objective.backward()
 
-                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    optim.step()
-                    optim.zero_grad()
-                    # lbfgs.step(closure)
-                    # lbfgs.zero_grad()
+                # if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                optim.step()
+                optim.zero_grad()
+                # lbfgs.step(closure)
+                # lbfgs.zero_grad()
                 torch.cuda.empty_cache()
 
             with torch.no_grad():
