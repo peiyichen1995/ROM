@@ -22,7 +22,7 @@ class NRBS(torch.nn.Module):
 
     def encode(self, x):
         x = self.encoder1(x)
-        x = torch.relu(x)
+        x = torch.sigmoid(x)
         x = self.encoder2(x)
         return x
 
@@ -73,7 +73,7 @@ class EncoderDecoder(torch.nn.Module):
         #     lr=1,
         # )
 
-        lr = 1e-4
+        lr = 1e-3
         optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
         accu_itr = effective_batch // train_data_loader.batch_size
@@ -117,9 +117,9 @@ class EncoderDecoder(torch.nn.Module):
                 torch.save(self.nrbs, model_name)
             else:
                 patience = patience + 1
-            if patience == 20:
+            if patience == 10:
                 patience = 0
-                lr = lr / 5
+                lr = lr / 10
                 optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
             print(
                 "Itr {:}, curr_loss = {:}, best_loss = {:}, lr = {:}".format(

@@ -5,6 +5,9 @@ import numpy as np
 import os
 import pdb
 
+from torch.utils.tensorboard import SummaryWriter
+from torchvision import datasets, transforms
+
 torch.set_default_dtype(torch.float64)
 
 # bandwidth: n x m
@@ -29,7 +32,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder = torch.nn.Linear(self.N, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 200)
+        self.encoder2 = torch.nn.Linear(200, self.n)
 
         self.decoder = torch.nn.Linear(self.n, self.N)
         hotness_map = []
@@ -46,11 +50,15 @@ class NRBS(torch.nn.Module):
             x = self.hotness_map[i](x)
             x = x * torch.sigmoid(x)
         x = self.hotness_map[-1](x)
-        x = torch.sigmoid(x)
+        # x = torch.sigmoid(x)
+        x = 1 / (1 + torch.exp(-x * 0.01))
         return x
 
     def encode(self, x):
-        return self.encoder(x)
+        x = self.encoder1(x)
+        x = torch.sigmoid(x)
+        x = self.encoder2(x)
+        return x
 
     # distance: N x mu
     # w: n x N ([0 element_size])
@@ -135,39 +143,39 @@ class EncoderDecoder(torch.nn.Module):
         self.device = device
 
     def train(self, train_data_loader, effective_batch=64, epochs=1):
-
+        writer = SummaryWriter()
         loss_func = torch.nn.MSELoss(reduction="sum")
-        model_name = "models/n_m_500.pth"
+        model_name = "models/n_m_hot_map_200_200.pth"
 
-        # L-BFGS
-        def closure():
-            objective = 0
-            lbfgs.zero_grad()
-            for u, u_dot in train_data_loader:
-                approximates = self.nrbs(u)
-                loss = loss_func(u_dot, approximates)
-                loss.backward()
-                objective = objective + loss
-            return objective
+        # # L-BFGS
+        # def closure():
+        #     objective = 0
+        #     lbfgs.zero_grad()
+        #     for u, u_dot in train_data_loader:
+        #         approximates = self.nrbs(u)
+        #         loss = loss_func(u_dot, approximates)
+        #         loss.backward()
+        #         objective = objective + loss
+        #     return objective
 
-        lbfgs = torch.optim.LBFGS(
-            self.nrbs.parameters(),
-            history_size=20,
-            max_iter=10,
-            line_search_fn="strong_wolfe",
-            lr=1,
-        )
+        # lbfgs = torch.optim.LBFGS(
+        #     self.nrbs.parameters(),
+        #     history_size=20,
+        #     max_iter=10,
+        #     line_search_fn="strong_wolfe",
+        #     lr=1,
+        # )
 
-        # lr = 1e-3
-        # optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
+        lr = 1e-3
+        optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
         best_loss = 0
         with torch.no_grad():
-            for u, u_dot in tqdm.tqdm(train_data_loader):
+            for u in tqdm.tqdm(train_data_loader):
                 approximates = self.nrbs(u)
-                loss = loss_func(u_dot, approximates)
+                loss = loss_func(u, approximates)
                 best_loss = best_loss + loss.item()
 
         print("Initial loss = {:}".format(best_loss / len(train_data_loader)))
@@ -175,43 +183,40 @@ class EncoderDecoder(torch.nn.Module):
         patience = 0
         for i in range(epochs):
             curr_loss = 0
-            for j, (u, u_dot) in enumerate(tqdm.tqdm(train_data_loader)):
+            for j, u in enumerate(tqdm.tqdm(train_data_loader)):
 
                 approximates = self.nrbs(u)
-                objective = loss_func(u_dot, approximates)
+                objective = loss_func(u, approximates)
                 objective.backward()
 
                 if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    # optim.step()
-                    # optim.zero_grad()
-                    lbfgs.step(closure)
-                    lbfgs.zero_grad()
+                    optim.step()
+                    optim.zero_grad()
+                    # lbfgs.step(closure)
+                    # lbfgs.zero_grad()
                 torch.cuda.empty_cache()
 
             with torch.no_grad():
-                for u, u_dot in tqdm.tqdm(train_data_loader):
+                for u in tqdm.tqdm(train_data_loader):
                     approximates = self.nrbs(u)
-                    loss = loss_func(u_dot, approximates)
+                    loss = loss_func(u, approximates)
                     curr_loss = curr_loss + loss.item()
 
             if curr_loss < best_loss:
+                patience = 0
                 best_loss = curr_loss
                 if os.path.isfile(model_name):
                     os.remove(model_name)
                 torch.save(self.nrbs, model_name)
-            # else:
-            #     patience = patience + 1
-            # if patience == 40:
-            #     patience = 0
-            #     lr = lr / 5
-            #     optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
-            print(
-                "Itr {:}, curr_loss = {:}, best_loss = {:}".format(
-                    i,
-                    curr_loss / len(train_data_loader),
-                    best_loss / len(train_data_loader),
-                )
-            )
+            else:
+                patience = patience + 1
+            if patience == 10:
+                patience = 0
+                lr = lr / 10
+                optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
+            writer.add_scalar("loss/current", curr_loss / len(train_data_loader), i)
+            writer.add_scalar("loss/best", best_loss / len(train_data_loader), i)
+            writer.add_scalar("lr", lr, i)
 
     def forward(self, x):
         return self.nrbs(x)
