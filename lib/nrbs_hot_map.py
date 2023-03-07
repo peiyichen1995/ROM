@@ -32,8 +32,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder1 = torch.nn.Linear(self.N, 200)
-        self.encoder2 = torch.nn.Linear(200, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 1000)
+        self.encoder2 = torch.nn.Linear(1000, self.n)
 
         self.decoder = torch.nn.Linear(self.n, self.N)
         hotness_map = []
@@ -146,10 +146,11 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def train(self, train_data_loader, effective_batch=64, epochs=1):
-        writer = SummaryWriter()
-        loss_func = torch.nn.MSELoss(reduction="sum")
-        model_name = "models/n_m_hot_map_200_200_kaiming_N_10.pth"
+    def train(
+        self, train_data_loader, comment, model_name, effective_batch=64, epochs=1
+    ):
+        writer = SummaryWriter(comment=comment)
+        loss_func = torch.nn.MSELoss(reduction="mean")
 
         # # L-BFGS
         # def closure():
@@ -201,7 +202,7 @@ class EncoderDecoder(torch.nn.Module):
                 torch.cuda.empty_cache()
 
             with torch.no_grad():
-                for u in tqdm.tqdm(train_data_loader):
+                for u in train_data_loader:
                     approximates = self.nrbs(u)
                     loss = loss_func(u, approximates)
                     curr_loss = curr_loss + loss.item()
