@@ -32,8 +32,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder1 = torch.nn.Linear(self.N, 1000)
-        self.encoder2 = torch.nn.Linear(1000, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 100)
+        self.encoder2 = torch.nn.Linear(100, self.n)
 
         self.decoder = torch.nn.Linear(self.n, self.N)
         hotness_map = []
