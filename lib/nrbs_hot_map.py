@@ -32,8 +32,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder1 = torch.nn.Linear(self.N, 100)
-        self.encoder2 = torch.nn.Linear(100, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 200)
+        self.encoder2 = torch.nn.Linear(200, self.n)
 
         self.decoder = torch.nn.Linear(self.n, self.N)
         hotness_map = []
@@ -146,8 +146,42 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
+    def eval(self, data_loader, norm):
+        loss_func = torch.nn.MSELoss(reduction="mean")
+        proj_loss_func = torch.nn.MSELoss(reduction="sum")
+
+        mean_err = 0
+        proj_err = 0
+        max_difference = 0
+        with torch.no_grad():
+            for u in data_loader:
+                approximates = self.nrbs(u)
+
+                loss = loss_func(u, approximates)
+                mean_err = mean_err + loss.item()
+
+                proj_loss = proj_loss_func(u, approximates)
+                proj_err = proj_err + proj_loss.item()
+
+                max_difference = max(
+                    torch.max(torch.abs(u - approximates)), max_difference
+                )
+        return (
+            mean_err / len(data_loader),
+            np.sqrt(proj_err) / torch.sqrt(norm),
+            max_difference,
+        )
+
     def train(
-        self, train_data_loader, comment, model_name, effective_batch=64, epochs=1
+        self,
+        train_data_loader,
+        test_data_loader,
+        train_norm,
+        eval_norm,
+        comment,
+        model_name,
+        effective_batch=100,
+        epochs=1,
     ):
         writer = SummaryWriter(comment=comment)
         loss_func = torch.nn.MSELoss(reduction="mean")
@@ -176,18 +210,38 @@ class EncoderDecoder(torch.nn.Module):
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
-        best_loss = 0
-        with torch.no_grad():
-            for u in tqdm.tqdm(train_data_loader):
-                approximates = self.nrbs(u)
-                loss = loss_func(u, approximates)
-                best_loss = best_loss + loss.item()
+        (
+            best_train_mean_err,
+            best_train_proj_err,
+            best_train_max_abs_difference,
+        ) = self.eval(train_data_loader, train_norm)
+        (
+            best_eval_mean_err,
+            best_eval_proj_err,
+            best_eval_max_abs_difference,
+        ) = self.eval(test_data_loader, eval_norm)
 
-        print("Initial loss = {:}".format(best_loss / len(train_data_loader)))
+        writer.add_scalar("loss/train_current", best_train_mean_err, -1)
+        writer.add_scalar("loss/test_current", best_eval_mean_err, -1)
+        writer.add_scalar(
+            "projection_err/train_current",
+            best_train_proj_err,
+            -1,
+        )
+        writer.add_scalar(
+            "projection_err/test_current",
+            best_eval_proj_err,
+            -1,
+        )
+        writer.add_scalar(
+            "max_abs_difference/train_current", best_train_max_abs_difference, -1
+        )
+        writer.add_scalar(
+            "max_abs_difference/test_current", best_eval_max_abs_difference, -1
+        )
 
         patience = 0
         for i in range(epochs):
-            curr_loss = 0
             for j, u in enumerate(train_data_loader):
 
                 approximates = self.nrbs(u)
@@ -201,15 +255,16 @@ class EncoderDecoder(torch.nn.Module):
                 # lbfgs.zero_grad()
                 torch.cuda.empty_cache()
 
-            with torch.no_grad():
-                for u in train_data_loader:
-                    approximates = self.nrbs(u)
-                    loss = loss_func(u, approximates)
-                    curr_loss = curr_loss + loss.item()
+            train_mean_err, train_proj_err, train_max_abs_difference = self.eval(
+                train_data_loader, train_norm
+            )
+            eval_mean_err, eval_proj_err, eval_max_abs_difference = self.eval(
+                test_data_loader, eval_norm
+            )
 
-            if curr_loss < best_loss:
+            if eval_proj_err < best_eval_proj_err:
                 patience = 0
-                best_loss = curr_loss
+                best_eval_proj_err = eval_proj_err
                 if os.path.isfile(model_name):
                     os.remove(model_name)
                 torch.save(self.nrbs, model_name)
@@ -219,8 +274,29 @@ class EncoderDecoder(torch.nn.Module):
                 patience = 0
                 lr = lr / 10
                 optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
-            writer.add_scalar("loss/current", curr_loss / len(train_data_loader), i)
-            writer.add_scalar("loss/best", best_loss / len(train_data_loader), i)
+            writer.add_scalar("loss/train_current", train_mean_err, i)
+            writer.add_scalar("loss/test_current", eval_mean_err, i)
+            writer.add_scalar(
+                "projection_err/train_current",
+                train_proj_err,
+                i,
+            )
+            writer.add_scalar(
+                "projection_err/test_current",
+                eval_proj_err,
+                i,
+            )
+            writer.add_scalar(
+                "projection_err/test_best",
+                best_eval_proj_err,
+                i,
+            )
+            writer.add_scalar(
+                "max_abs_difference/train_current", train_max_abs_difference, i
+            )
+            writer.add_scalar(
+                "max_abs_difference/test_current", eval_max_abs_difference, i
+            )
             writer.add_scalar("lr", lr, i)
 
     def forward(self, x):

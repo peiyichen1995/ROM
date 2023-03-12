@@ -45,3 +45,12 @@ def similarity_matrix(mat):
 def topk_neighbours(coords, k):
     sim = similarity_matrix(coords)
     return torch.topk(sim, k, largest=False, sorted=True)
+
+
+def split_data(datas, split_size):
+    splits = torch.utils.data.random_split(
+        datas, split_size, generator=torch.Generator().manual_seed(42)
+    )
+    train_data = splits[0].__getitem__([i for i in range(0, len(splits[0]))])
+    test_data = splits[1].__getitem__([i for i in range(0, len(splits[1]))])
+    return train_data, test_data
