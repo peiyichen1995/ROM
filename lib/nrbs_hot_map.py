@@ -32,8 +32,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder1 = torch.nn.Linear(self.N, 200)
-        self.encoder2 = torch.nn.Linear(200, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 100)
+        self.encoder2 = torch.nn.Linear(100, self.n)
 
         self.decoder = torch.nn.Linear(self.n, self.N)
         hotness_map = []
@@ -166,6 +166,8 @@ class EncoderDecoder(torch.nn.Module):
                 max_difference = max(
                     torch.max(torch.abs(u - approximates)), max_difference
                 )
+                torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
         return (
             mean_err / len(data_loader),
             np.sqrt(proj_err) / torch.sqrt(norm),
@@ -180,30 +182,11 @@ class EncoderDecoder(torch.nn.Module):
         eval_norm,
         comment,
         model_name,
-        effective_batch=100,
+        effective_batch=240,
         epochs=1,
     ):
         writer = SummaryWriter(comment=comment)
         loss_func = torch.nn.MSELoss(reduction="mean")
-
-        # # L-BFGS
-        # def closure():
-        #     objective = 0
-        #     lbfgs.zero_grad()
-        #     for u, u_dot in train_data_loader:
-        #         approximates = self.nrbs(u)
-        #         loss = loss_func(u_dot, approximates)
-        #         loss.backward()
-        #         objective = objective + loss
-        #     return objective
-
-        # lbfgs = torch.optim.LBFGS(
-        #     self.nrbs.parameters(),
-        #     history_size=20,
-        #     max_iter=10,
-        #     line_search_fn="strong_wolfe",
-        #     lr=1,
-        # )
 
         lr = 1e-3
         optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
@@ -248,12 +231,12 @@ class EncoderDecoder(torch.nn.Module):
                 objective = loss_func(u, approximates)
                 objective.backward()
 
-                # if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                optim.step()
-                optim.zero_grad()
-                # lbfgs.step(closure)
-                # lbfgs.zero_grad()
+                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                    optim.step()
+                    optim.zero_grad()
                 torch.cuda.empty_cache()
+
+            torch.cuda.empty_cache()
 
             train_mean_err, train_proj_err, train_max_abs_difference = self.eval(
                 train_data_loader, train_norm
