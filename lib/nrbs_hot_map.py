@@ -32,8 +32,8 @@ class NRBS(torch.nn.Module):
         self.neighbour_distance = neighbour_distance
         self.clustering_labels = clustering_labels
 
-        self.encoder1 = torch.nn.Linear(self.N, 100)
-        self.encoder2 = torch.nn.Linear(100, self.n)
+        self.encoder1 = torch.nn.Linear(self.N, 200)
+        self.encoder2 = torch.nn.Linear(200, self.n)
 
         self.decoder = torch.nn.Linear(self.n, self.N)
         hotness_map = []
@@ -54,8 +54,7 @@ class NRBS(torch.nn.Module):
             x = self.hotness_map[i](x)
             x = x * torch.sigmoid(x)
         x = self.hotness_map[-1](x)
-        # x = torch.sigmoid(x)
-        x = 1 / (1 + torch.exp(-x * 0.01))
+        x = 1 / (1 + torch.exp(-x * 0.005))
         return x
 
     def encode(self, x):
@@ -231,9 +230,9 @@ class EncoderDecoder(torch.nn.Module):
                 objective = loss_func(u, approximates)
                 objective.backward()
 
-                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    optim.step()
-                    optim.zero_grad()
+                # if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                optim.step()
+                optim.zero_grad()
                 torch.cuda.empty_cache()
 
             torch.cuda.empty_cache()
@@ -254,6 +253,7 @@ class EncoderDecoder(torch.nn.Module):
             else:
                 patience = patience + 1
             if patience == 10:
+                self.nrbs = torch.load(model_name)
                 patience = 0
                 lr = lr / 10
                 optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
