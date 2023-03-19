@@ -2,3 +2,6 @@
 *.csv
 *.pth
 runs/
+Backward_Difference_sine_pulse_share.ipynb
+*.npy
+train_paper_data.ipynb

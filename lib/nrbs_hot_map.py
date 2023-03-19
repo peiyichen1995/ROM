@@ -42,6 +42,7 @@ class NRBS(torch.nn.Module):
             hotness_map.append(torch.nn.Linear(in_dim, dim))
             in_dim = dim
         self.hotness_map = torch.nn.ModuleList(hotness_map)
+        # self.resnet = torch.nn.Linear(self.n, self.m[-1])
 
         self.B = torch.nn.Parameter(torch.tensor([B0]))
 
@@ -50,10 +51,12 @@ class NRBS(torch.nn.Module):
         torch.nn.init.kaiming_normal_(self.decoder.weight, mode="fan_out")
 
     def hotness(self, x):
+        # residual = torch.clone(x)
         for i in range(len(self.m) - 1):
             x = self.hotness_map[i](x)
             x = x * torch.sigmoid(x)
         x = self.hotness_map[-1](x)
+        # x = x + self.resnet(residual)
         x = 1 / (1 + torch.exp(-x * 0.005))
         return x
 

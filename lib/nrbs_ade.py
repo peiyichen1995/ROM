@@ -5,6 +5,8 @@ import numpy as np
 import os
 import pdb
 
+from torch.utils.tensorboard import SummaryWriter
+
 torch.set_default_dtype(torch.float64)
 
 # bandwidth: n x m
@@ -20,10 +22,10 @@ class NRBS(torch.nn.Module):
         self.decoder1 = torch.nn.Linear(self.n, 33730)
         self.decoder2 = torch.nn.Linear(33730, self.N)
 
-        torch.nn.init.kaiming_normal_(self.encoder1.weight, mode="fan_out")
-        torch.nn.init.kaiming_normal_(self.encoder2.weight, mode="fan_out")
-        torch.nn.init.kaiming_normal_(self.decoder1.weight, mode="fan_out")
-        torch.nn.init.kaiming_normal_(self.decoder2.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.encoder1.weight)
+        torch.nn.init.kaiming_normal_(self.encoder2.weight)
+        torch.nn.init.kaiming_normal_(self.decoder1.weight)
+        torch.nn.init.kaiming_normal_(self.decoder2.weight)
 
     def encode(self, x):
         x = self.encoder1(x)
@@ -31,10 +33,11 @@ class NRBS(torch.nn.Module):
         x = self.encoder2(x)
         return x
 
-    def decode(self, encoded):
-        encoded = self.decoder1(encoded)
-        encoded = self.decoder2(encoded)
-        return encoded
+    def decode(self, x):
+        x = self.decoder1(x)
+        x = torch.sigmoid(x)
+        x = self.decoder2(x)
+        return x
 
     def forward(self, x):
         return self.decode(self.encode(x))
@@ -54,90 +57,85 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def train(self, train_data_loader, effective_batch=64, epochs=1):
+    def eval(self, data_loader, norm):
+
+        loss = 0
+        with torch.no_grad():
+            for u in data_loader:
+                approximates = self.nrbs(u)
+                loss = loss + torch.sum((u - approximates) ** 2)
+
+            torch.cuda.empty_cache()
+        return (
+            loss / 3600 / 5404,
+            torch.sqrt(loss) / torch.sqrt(norm),
+        )
+
+    def train(
+        self,
+        train_dataloader,
+        test_dataloader,
+        unseen_dataloader,
+        train_norm,
+        test_norm,
+        unseen_norm,
+        comment,
+        epochs=1,
+    ):
+
+        writer = SummaryWriter(comment=comment)
 
         loss_func = torch.nn.MSELoss(reduction="sum")
         model_name = "models/ade.pth"
 
-        # # L-BFGS
-        # def closure():
-        #     objective = 0
-        #     lbfgs.zero_grad()
-        #     for u in train_data_loader:
-        #         approximates = self.nrbs(u)
-        #         loss = loss_func(u, approximates)
-        #         loss.backward()
-        #         objective = objective + loss
-        #     return objective
-
-        # lbfgs = torch.optim.LBFGS(
-        #     self.nrbs.parameters(),
-        #     history_size=20,
-        #     max_iter=10,
-        #     line_search_fn="strong_wolfe",
-        #     lr=1,
-        # )
-
-        lr = 1e-4
+        lr = 1e-3
         optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
-        accu_itr = effective_batch // train_data_loader.batch_size
+        _, best_unseen_proj_err = self.eval(unseen_dataloader, unseen_norm)
 
-        best_loss = 0
-        with torch.no_grad():
-            for u in tqdm.tqdm(train_data_loader):
-                approximates = self.nrbs(u)
-                loss = loss_func(u, approximates)
-                best_loss = best_loss + loss.item()
-
-        print(
-            "Initial loss = {:}".format(
-                best_loss / len(train_data_loader) / train_data_loader.batch_size
-            )
-        )
+        writer.add_scalar("projection_err/unseen_best", best_unseen_proj_err, -1)
 
         patience = 0
         for i in range(epochs):
             curr_loss = 0
-            for j, (u) in enumerate(tqdm.tqdm(train_data_loader)):
+            for j, (u) in enumerate(tqdm.tqdm(train_dataloader)):
 
                 approximates = self.nrbs(u)
                 objective = loss_func(u, approximates)
                 objective.backward()
+                optim.step()
+                optim.zero_grad()
 
-                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    optim.step()
-                    optim.zero_grad()
-                    # lbfgs.step(closure)
-                    # lbfgs.zero_grad()
                 torch.cuda.empty_cache()
 
-            with torch.no_grad():
-                for u in tqdm.tqdm(train_data_loader):
-                    approximates = self.nrbs(u)
-                    loss = loss_func(u, approximates)
-                    curr_loss = curr_loss + loss.item()
+            train_loss, train_proj_err = self.eval(train_dataloader, train_norm)
+            test_loss, test_proj_err = self.eval(test_dataloader, test_norm)
+            unseen_loss, unseen_proj_err = self.eval(unseen_dataloader, unseen_norm)
 
-            if curr_loss < best_loss:
+            if unseen_proj_err < best_unseen_proj_err:
                 patience = 0
-                best_loss = curr_loss
+                best_unseen_proj_err = unseen_proj_err
                 if os.path.isfile(model_name):
                     os.remove(model_name)
                 torch.save(self.nrbs, model_name)
             else:
                 patience = patience + 1
             if patience == 10:
+                self.nrbs = torch.load(model_name)
                 patience = 0
                 lr = lr / 10
                 optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
-            print(
-                "Itr {:}, curr_loss = {:}, best_loss = {:}, lr = {:}".format(
-                    i,
-                    curr_loss / len(train_data_loader) / train_data_loader.batch_size,
-                    best_loss / len(train_data_loader) / train_data_loader.batch_size,
-                    lr,
-                )
-            )
+
+            writer.add_scalar("loss/train_current", train_loss, i)
+            writer.add_scalar("loss/test_current", test_loss, i)
+            writer.add_scalar("loss/unseen_current", unseen_loss, i)
+
+            writer.add_scalar("projection_err/train_current", train_proj_err, i)
+            writer.add_scalar("projection_err/test_current", test_proj_err, i)
+            writer.add_scalar("projection_err/unseen_current", unseen_proj_err, i)
+            writer.add_scalar("projection_err/unseen_best", best_unseen_proj_err, i)
+
+            writer.add_scalar("lr", lr, i)
 
     def forward(self, x):
         return self.nrbs(x)
