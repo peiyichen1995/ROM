@@ -57,19 +57,20 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def eval(self, data_loader, norm):
+    def eval(self, data_loader, norm, Nt):
 
         loss = 0
+        mse = 0
         with torch.no_grad():
             for u in data_loader:
                 approximates = self.nrbs(u)
-                loss = loss + torch.sum((u - approximates) ** 2)
+                loss = loss + torch.sum(
+                    torch.sum((u - approximates) ** 2, dim=1) / torch.sum(u**2, dim=1)
+                )
+                mse = mse + torch.sum((u - approximates) ** 2)
 
             torch.cuda.empty_cache()
-        return (
-            loss / 3600 / 5404,
-            torch.sqrt(loss) / torch.sqrt(norm),
-        )
+        return (mse / 3600 / Nt, torch.sqrt(loss / Nt))
 
     def train(
         self,
@@ -91,14 +92,14 @@ class EncoderDecoder(torch.nn.Module):
         lr = 1e-3
         optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
 
-        _, best_unseen_proj_err = self.eval(unseen_dataloader, unseen_norm)
+        _, best_unseen_proj_err = self.eval(unseen_dataloader, unseen_norm, 1501)
 
         writer.add_scalar("projection_err/unseen_best", best_unseen_proj_err, -1)
 
         patience = 0
         for i in range(epochs):
             curr_loss = 0
-            for j, (u) in enumerate(tqdm.tqdm(train_dataloader)):
+            for u in train_dataloader:
 
                 approximates = self.nrbs(u)
                 objective = loss_func(u, approximates)
@@ -108,9 +109,11 @@ class EncoderDecoder(torch.nn.Module):
 
                 torch.cuda.empty_cache()
 
-            train_loss, train_proj_err = self.eval(train_dataloader, train_norm)
-            test_loss, test_proj_err = self.eval(test_dataloader, test_norm)
-            unseen_loss, unseen_proj_err = self.eval(unseen_dataloader, unseen_norm)
+            train_loss, train_proj_err = self.eval(train_dataloader, train_norm, 5404)
+            test_loss, test_proj_err = self.eval(test_dataloader, test_norm, 600)
+            unseen_loss, unseen_proj_err = self.eval(
+                unseen_dataloader, unseen_norm, 1501
+            )
 
             if unseen_proj_err < best_unseen_proj_err:
                 patience = 0
