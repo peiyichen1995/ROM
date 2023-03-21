@@ -62,7 +62,7 @@ class NRBS(torch.nn.Module):
 
     def encode(self, x):
         x = self.encoder1(x)
-        x = torch.sigmoid(x)
+        x = x * torch.sigmoid(x)
         x = self.encoder2(x)
         return x
 
@@ -103,7 +103,7 @@ class NRBS(torch.nn.Module):
             )
             # n x N
             bandwidths = (1 - H / 2) ** torch.arange(
-                self.n, device=encoded.device
+                1, self.n + 1, device=encoded.device
             ).unsqueeze(-1) * self.B
             convolved_basis[i] = self.convolve(
                 self.decoder.weight.T,
@@ -148,9 +148,7 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def eval(self, data_loader, norm):
-        loss_func = torch.nn.MSELoss(reduction="mean")
-        proj_loss_func = torch.nn.MSELoss(reduction="sum")
+    def eval(self, data_loader, u_ref):
 
         mean_err = 0
         proj_err = 0
@@ -159,20 +157,20 @@ class EncoderDecoder(torch.nn.Module):
             for u in data_loader:
                 approximates = self.nrbs(u)
 
-                loss = loss_func(u, approximates)
-                mean_err = mean_err + loss.item()
+                mean_err = mean_err + torch.sum((u - approximates) ** 2)
 
-                proj_loss = proj_loss_func(u, approximates)
-                proj_err = proj_err + proj_loss.item()
+                proj_err = proj_err + torch.sum(
+                    torch.sum((u - approximates) ** 2, dim=1)
+                    / torch.sum((u + u_ref) ** 2, dim=1)
+                )
 
                 max_difference = max(
                     torch.max(torch.abs(u - approximates)), max_difference
                 )
-                torch.cuda.empty_cache()
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
         return (
-            mean_err / len(data_loader),
-            np.sqrt(proj_err) / torch.sqrt(norm),
+            mean_err / u_ref.shape[0] / len(data_loader.dataset),
+            torch.sqrt(proj_err / len(data_loader.dataset)),
             max_difference,
         )
 
@@ -180,11 +178,11 @@ class EncoderDecoder(torch.nn.Module):
         self,
         train_data_loader,
         test_data_loader,
-        train_norm,
-        eval_norm,
+        unseen_data_loader,
+        u_ref,
         comment,
         model_name,
-        effective_batch=240,
+        effective_batch=50,
         epochs=1,
     ):
         writer = SummaryWriter(comment=comment)
@@ -199,15 +197,22 @@ class EncoderDecoder(torch.nn.Module):
             best_train_mean_err,
             best_train_proj_err,
             best_train_max_abs_difference,
-        ) = self.eval(train_data_loader, train_norm)
+        ) = self.eval(train_data_loader, u_ref)
         (
-            best_eval_mean_err,
-            best_eval_proj_err,
-            best_eval_max_abs_difference,
-        ) = self.eval(test_data_loader, eval_norm)
+            best_test_mean_err,
+            best_test_proj_err,
+            best_test_max_abs_difference,
+        ) = self.eval(test_data_loader, u_ref)
+        (
+            best_unseen_mean_err,
+            best_unseen_proj_err,
+            best_unseen_max_abs_difference,
+        ) = self.eval(unseen_data_loader, u_ref)
 
         writer.add_scalar("loss/train_current", best_train_mean_err, -1)
-        writer.add_scalar("loss/test_current", best_eval_mean_err, -1)
+        writer.add_scalar("loss/test_current", best_test_mean_err, -1)
+        writer.add_scalar("loss/unseen_current", best_unseen_mean_err, -1)
+
         writer.add_scalar(
             "projection_err/train_current",
             best_train_proj_err,
@@ -215,14 +220,23 @@ class EncoderDecoder(torch.nn.Module):
         )
         writer.add_scalar(
             "projection_err/test_current",
-            best_eval_proj_err,
+            best_test_proj_err,
             -1,
         )
+        writer.add_scalar(
+            "projection_err/unseen_current",
+            best_unseen_proj_err,
+            -1,
+        )
+
         writer.add_scalar(
             "max_abs_difference/train_current", best_train_max_abs_difference, -1
         )
         writer.add_scalar(
-            "max_abs_difference/test_current", best_eval_max_abs_difference, -1
+            "max_abs_difference/test_current", best_test_max_abs_difference, -1
+        )
+        writer.add_scalar(
+            "max_abs_difference/unseen_current", best_unseen_max_abs_difference, -1
         )
 
         patience = 0
@@ -233,23 +247,31 @@ class EncoderDecoder(torch.nn.Module):
                 objective = loss_func(u, approximates)
                 objective.backward()
 
-                # if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                optim.step()
-                optim.zero_grad()
-                torch.cuda.empty_cache()
+                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                    optim.step()
+                    optim.zero_grad()
 
             torch.cuda.empty_cache()
 
             train_mean_err, train_proj_err, train_max_abs_difference = self.eval(
-                train_data_loader, train_norm
+                train_data_loader, u_ref
             )
-            eval_mean_err, eval_proj_err, eval_max_abs_difference = self.eval(
-                test_data_loader, eval_norm
+            test_mean_err, test_proj_err, test_max_abs_difference = self.eval(
+                test_data_loader, u_ref
+            )
+            unseen_mean_err, unseen_proj_err, unseen_max_abs_difference = self.eval(
+                test_data_loader, u_ref
             )
 
-            if eval_proj_err < best_eval_proj_err:
+            if unseen_proj_err < best_unseen_proj_err:
+                best_unseen_proj_err = unseen_proj_err
+
+            if train_proj_err < best_train_proj_err:
+                best_train_proj_err = train_proj_err
+
+            if test_proj_err < best_test_proj_err:
                 patience = 0
-                best_eval_proj_err = eval_proj_err
+                best_test_proj_err = test_proj_err
                 if os.path.isfile(model_name):
                     os.remove(model_name)
                 torch.save(self.nrbs, model_name)
@@ -261,7 +283,9 @@ class EncoderDecoder(torch.nn.Module):
                 lr = lr / 10
                 optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
             writer.add_scalar("loss/train_current", train_mean_err, i)
-            writer.add_scalar("loss/test_current", eval_mean_err, i)
+            writer.add_scalar("loss/test_current", test_mean_err, i)
+            writer.add_scalar("loss/unseen_current", unseen_mean_err, i)
+
             writer.add_scalar(
                 "projection_err/train_current",
                 train_proj_err,
@@ -269,20 +293,41 @@ class EncoderDecoder(torch.nn.Module):
             )
             writer.add_scalar(
                 "projection_err/test_current",
-                eval_proj_err,
+                test_proj_err,
+                i,
+            )
+            writer.add_scalar(
+                "projection_err/unseen_current",
+                unseen_proj_err,
+                i,
+            )
+
+            writer.add_scalar(
+                "projection_err/train_best",
+                best_train_proj_err,
                 i,
             )
             writer.add_scalar(
                 "projection_err/test_best",
-                best_eval_proj_err,
+                best_test_proj_err,
                 i,
             )
+            writer.add_scalar(
+                "projection_err/unseen_best",
+                best_unseen_proj_err,
+                i,
+            )
+
             writer.add_scalar(
                 "max_abs_difference/train_current", train_max_abs_difference, i
             )
             writer.add_scalar(
-                "max_abs_difference/test_current", eval_max_abs_difference, i
+                "max_abs_difference/test_current", test_max_abs_difference, i
             )
+            writer.add_scalar(
+                "max_abs_difference/unseen_current", unseen_max_abs_difference, i
+            )
+
             writer.add_scalar("lr", lr, i)
 
     def forward(self, x):
