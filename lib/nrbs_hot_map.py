@@ -46,23 +46,23 @@ class NRBS(torch.nn.Module):
 
         self.B = torch.nn.Parameter(torch.tensor([B0]))
 
-        torch.nn.init.kaiming_normal_(self.encoder1.weight, mode="fan_out")
-        torch.nn.init.kaiming_normal_(self.encoder2.weight, mode="fan_out")
-        torch.nn.init.kaiming_normal_(self.decoder.weight, mode="fan_out")
+        torch.nn.init.kaiming_normal_(self.encoder1.weight)
+        torch.nn.init.kaiming_normal_(self.encoder2.weight)
+        torch.nn.init.kaiming_normal_(self.decoder.weight)
 
     def hotness(self, x):
         # residual = torch.clone(x)
         for i in range(len(self.m) - 1):
             x = self.hotness_map[i](x)
-            x = x * torch.sigmoid(x)
+            x = torch.sigmoid(x)
         x = self.hotness_map[-1](x)
         # x = x + self.resnet(residual)
-        x = 1 / (1 + torch.exp(-x * 0.005))
+        x = 1 / (1 + torch.exp(-x * 0.01))
         return x
 
     def encode(self, x):
         x = self.encoder1(x)
-        x = x * torch.sigmoid(x)
+        x = torch.sigmoid(x)
         x = self.encoder2(x)
         return x
 
@@ -88,6 +88,19 @@ class NRBS(torch.nn.Module):
         bubbles = self.bubble(neighbour_distance, w, mu)
         return torch.sum(x[:, neighbour_id] * bubbles, dim=-1)
 
+    def bandwidths(self, encoded):
+        H = (
+            self.hotness(encoded)[self.clustering_labels]
+            .unsqueeze(0)
+            .expand(self.n, -1)
+        )
+        # n x N
+        bs = (1 - H / 2) ** torch.arange(
+            1, self.n + 1, device=encoded.device
+        ).unsqueeze(-1) * self.B
+
+        return bs
+
     def decode(self, encoded):
         # return self.linear_decoder(encoded)
         b = encoded.shape[0]
@@ -96,15 +109,7 @@ class NRBS(torch.nn.Module):
 
         # b x m
         for i in range(b):
-            H = (
-                self.hotness(encoded[i])[self.clustering_labels]
-                .unsqueeze(0)
-                .expand(self.n, -1)
-            )
-            # n x N
-            bandwidths = (1 - H / 2) ** torch.arange(
-                1, self.n + 1, device=encoded.device
-            ).unsqueeze(-1) * self.B
+            bandwidths = self.bandwidths(encoded[i])
             convolved_basis[i] = self.convolve(
                 self.decoder.weight.T,
                 self.neighbour_id,
@@ -148,29 +153,23 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def eval(self, data_loader, u_ref):
+    def eval(self, data_loader, norm):
 
-        mean_err = 0
-        proj_err = 0
+        loss = 0
         max_difference = 0
         with torch.no_grad():
             for u in data_loader:
                 approximates = self.nrbs(u)
 
-                mean_err = mean_err + torch.sum((u - approximates) ** 2)
-
-                proj_err = proj_err + torch.sum(
-                    torch.sum((u - approximates) ** 2, dim=1)
-                    / torch.sum((u + u_ref) ** 2, dim=1)
-                )
+                loss = loss + torch.sum((u - approximates) ** 2)
 
                 max_difference = max(
                     torch.max(torch.abs(u - approximates)), max_difference
                 )
         torch.cuda.empty_cache()
         return (
-            mean_err / u_ref.shape[0] / len(data_loader.dataset),
-            torch.sqrt(proj_err / len(data_loader.dataset)),
+            loss / data_loader.dataset[0].shape[0] / len(data_loader.dataset),
+            torch.sqrt(loss) / torch.sqrt(norm),
             max_difference,
         )
 
@@ -182,7 +181,7 @@ class EncoderDecoder(torch.nn.Module):
         u_ref,
         comment,
         model_name,
-        effective_batch=50,
+        effective_batch=240,
         epochs=1,
     ):
         writer = SummaryWriter(comment=comment)
@@ -193,21 +192,25 @@ class EncoderDecoder(torch.nn.Module):
 
         accu_itr = effective_batch // train_data_loader.batch_size
 
+        train_norm = torch.sum((train_data_loader.dataset + u_ref) ** 2)
+        test_norm = torch.sum((test_data_loader.dataset + u_ref) ** 2)
+        unseen_norm = torch.sum((unseen_data_loader.dataset + u_ref) ** 2)
+
         (
             best_train_mean_err,
             best_train_proj_err,
             best_train_max_abs_difference,
-        ) = self.eval(train_data_loader, u_ref)
+        ) = self.eval(train_data_loader, train_norm)
         (
             best_test_mean_err,
             best_test_proj_err,
             best_test_max_abs_difference,
-        ) = self.eval(test_data_loader, u_ref)
+        ) = self.eval(test_data_loader, test_norm)
         (
             best_unseen_mean_err,
             best_unseen_proj_err,
             best_unseen_max_abs_difference,
-        ) = self.eval(unseen_data_loader, u_ref)
+        ) = self.eval(unseen_data_loader, unseen_norm)
 
         writer.add_scalar("loss/train_current", best_train_mean_err, -1)
         writer.add_scalar("loss/test_current", best_test_mean_err, -1)
@@ -247,20 +250,20 @@ class EncoderDecoder(torch.nn.Module):
                 objective = loss_func(u, approximates)
                 objective.backward()
 
-                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    optim.step()
-                    optim.zero_grad()
+                # if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
+                optim.step()
+                optim.zero_grad()
 
             torch.cuda.empty_cache()
 
             train_mean_err, train_proj_err, train_max_abs_difference = self.eval(
-                train_data_loader, u_ref
+                train_data_loader, train_norm
             )
             test_mean_err, test_proj_err, test_max_abs_difference = self.eval(
-                test_data_loader, u_ref
+                test_data_loader, test_norm
             )
             unseen_mean_err, unseen_proj_err, unseen_max_abs_difference = self.eval(
-                test_data_loader, u_ref
+                test_data_loader, unseen_norm
             )
 
             if unseen_proj_err < best_unseen_proj_err:
@@ -328,7 +331,14 @@ class EncoderDecoder(torch.nn.Module):
                 "max_abs_difference/unseen_current", unseen_max_abs_difference, i
             )
 
-            writer.add_scalar("lr", lr, i)
+            # writer.add_scalar("lr", lr, i)
+
+            # xi = yi = np.linspace(0, 1.0, 1200)
+            # xi, yi = np.meshgrid(xi, yi)
+            # # draw hotnessmap
+            # encoded = self.nrbs.encode(u_peek)
+            # H = self.nrbs.hotness(encoded)[self.nrbs.clustering_labels]
+            # writer.add_figure
 
     def forward(self, x):
         return self.nrbs(x)
