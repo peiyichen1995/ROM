@@ -4,6 +4,7 @@ import tqdm
 import numpy as np
 import os
 import pdb
+from torch.utils.tensorboard import SummaryWriter
 
 torch.set_default_dtype(torch.float64)
 
@@ -71,12 +72,6 @@ class NRBS(torch.nn.Module):
                 bandwidths,
                 self.mu,
             )
-            # bubbles = self.bubbles(encoded[i])
-            # bubbles = bubbles.reshape(self.n, self.m, self.mu)
-            # bubbles = bubbles[:, self.clustering_labels, :]
-            # convolved_basis[i] = torch.sum(
-            #     self.decoder.weight[:, self.neighbour_id] * bubbles, dim=-1
-            # )
 
         # batch size x N
         return torch.bmm(encoded.unsqueeze(1), convolved_basis).squeeze(1)
@@ -101,78 +96,52 @@ class EncoderDecoder(torch.nn.Module):
         ).to(device)
         self.device = device
 
-    def train(self, train_data_loader, effective_batch=64, epochs=1):
+    def train(
+        self, train_dataloader, test_dataloader, x_ref, effective_batch=64, epochs=1
+    ):
 
-        loss_func = torch.nn.MSELoss(reduction="sum")
-        model_name = "models/n_m_500.pth"
+        optimizer = torch.optim.Adam(self.nrbs.parameters(), lr=1e-3, weight_decay=0)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, "min", factor=0.1, patience=10
+        )
 
-        # # L-BFGS
-        # def closure():
-        #     lbfgs.zero_grad()
-        #     approximates = self.nrbs(x[:, : self.nrbs.N])
-        #     objective = loss_func(x[:, self.nrbs.N :], approximates)
-        #     objective.backward()
-        #     return objective
+        loss_func = torch.nn.MSELoss()
 
-        # lbfgs = torch.optim.LBFGS(
-        #     self.nrbs.parameters(),
-        #     history_size=20,
-        #     max_iter=10,
-        #     line_search_fn="strong_wolfe",
-        #     lr=1,
-        # )
+        best_loss = 1000
+        writer = SummaryWriter()
+        for epoch in range(epochs):
+            for x in tqdm.tqdm(train_dataloader):
+                optimizer.zero_grad()
+                x_tilde = self.nrbs(x - x_ref) + x_ref
+                l = torch.sqrt(torch.sum((x_tilde - x) ** 2))
+                l.backward()
+                optimizer.step()
 
-        lr = 1e-3
-        optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
-
-        accu_itr = effective_batch // train_data_loader.batch_size
-
-        best_loss = 0
-        with torch.no_grad():
-            for x in tqdm.tqdm(train_data_loader):
-                approximates = self.nrbs(x[:, : self.nrbs.N])
-                loss = loss_func(x[:, self.nrbs.N :], approximates)
-                best_loss = best_loss + loss.item()
-
-        print("Loss = {:}".format(best_loss / 1000))
-
-        patience = 0
-        for i in range(epochs):
-            curr_loss = 0
-            for j, x in enumerate(tqdm.tqdm(train_data_loader)):
-                # lbfgs.zero_grad()
-                approximates = self.nrbs(x[:, : self.nrbs.N])
-                objective = loss_func(x[:, self.nrbs.N :], approximates)
-                objective.backward()
-                # lbfgs.step(closure)
-
-                if ((j + 1) % accu_itr == 0) or (j + 1 == len(train_data_loader)):
-                    optim.step()
-                    optim.zero_grad()
-                torch.cuda.empty_cache()
-
+            l_train = 0
+            l_test = 0
             with torch.no_grad():
-                for x in tqdm.tqdm(train_data_loader):
-                    approximates = self.nrbs(x[:, : self.nrbs.N])
-                    loss = loss_func(x[:, self.nrbs.N :], approximates)
-                    curr_loss = curr_loss + loss.item()
+                for x in tqdm.tqdm(train_dataloader):
+                    X_tilde = self.nrbs(x - x_ref)
+                    l_train = l_train + torch.sum((x - X_tilde) ** 2)
+                for x in tqdm.tqdm(test_dataloader):
+                    X_tilde = self.nrbs(x - x_ref)
+                    l_test = l_test + torch.sum((x - X_tilde) ** 2)
 
-            if curr_loss < best_loss:
-                best_loss = curr_loss
-                if os.path.isfile(model_name):
-                    os.remove(model_name)
-                torch.save(self.nrbs, model_name)
-            else:
-                patience = patience + 1
-            if patience == 40:
-                patience = 0
-                lr = lr / 5
-                optim = torch.optim.Adam(self.nrbs.parameters(), lr=lr)
-            print(
-                "Itr {:}, curr_loss = {:}, best_loss = {:}, lr = {:}".format(
-                    i, curr_loss / 1000, best_loss / 1000, lr
+                l_test = torch.sqrt(l_test) / torch.sqrt(
+                    torch.sum(test_dataloader.dataset**2)
                 )
-            )
+                l_train = torch.sqrt(l_train) / torch.sqrt(
+                    torch.sum(train_dataloader.dataset**2)
+                )
+                l_train_mse = l_train / 3600 / len(train_dataloader.dataset)
+
+            scheduler.step(l_train)
+
+            writer.add_scalar("loss/train", l_train, epoch)
+            writer.add_scalar("loss/test", l_test, epoch)
+            writer.add_scalar("loss/mse_train", l_train_mse, epoch)
+
+            writer.add_scalar("lr", optimizer.param_groups[0]["lr"], epoch)
 
     def forward(self, x):
         return self.nrbs(x)
